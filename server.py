@@ -22,6 +22,7 @@ from account_store import (
     delete_account,
     recover_password,
 )
+from moderation import contains_blocked_term, load_blocked_terms
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ account_attempts = {}
 chat_attempts = {}
 global_chat_history = deque(maxlen=CHAT_HISTORY_LIMIT)
 room_chat_history = {room_id: deque(maxlen=CHAT_HISTORY_LIMIT) for room_id in rooms}
+BLOCKED_TERMS = load_blocked_terms()
 
 
 def _clean_name(value):
@@ -495,6 +497,10 @@ async def handle_client(websocket):
                         continue
                     if not _chat_allowed(websocket):
                         await websocket.send(json.dumps({"cmd": "chat_rejected", "reason": "rate_limited"}))
+                        continue
+                    if contains_blocked_term(text, BLOCKED_TERMS):
+                        logger.info("Blocked chat message from an authenticated player")
+                        await websocket.send(json.dumps({"cmd": "chat_rejected", "reason": "blocked_content"}))
                         continue
                     payload = _chat_payload(scope, websocket, text, room if scope == "team" else None)
                     if scope == "global":

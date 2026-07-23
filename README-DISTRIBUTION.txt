@@ -22,6 +22,8 @@ CHAT
   one-monitor setup; the lightweight click-through message overlay stays available.
 - Switch between Global and My Team. Global messages reach all connected players;
   My Team messages are visible only to the people in your selected team.
+- Severe slurs are blocked by the server before they can be sent, saved, or shown
+  to other players. Normal gameplay banter is still allowed.
 - Press Enter or Send to post a message.
 - Timer hotkeys automatically pause while you type in chat or a settings field,
   then immediately return when you click back into the game.

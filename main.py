@@ -303,7 +303,12 @@ class WebSocketClient:
                     elif cmd == "timer_rejected":
                         self.app.dispatch_ui(lambda: self.app.update_status("Timer was rejected: claim the matching Capper role first."))
                     elif cmd == "chat_rejected":
-                        self.app.dispatch_ui(lambda: self.app.update_status("Chat is moving too fast. Please wait a few seconds."))
+                        message = (
+                            "That message is not allowed."
+                            if data.get("reason") == "blocked_content"
+                            else "Chat is moving too fast. Please wait a few seconds."
+                        )
+                        self.app.dispatch_ui(lambda message=message: self.app.update_status(message))
                     elif cmd == "chat_history":
                         scope = data.get("scope")
                         messages = data.get("messages", [])

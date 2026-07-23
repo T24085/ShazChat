@@ -121,6 +121,18 @@ ShazChat is released under the [MIT License](LICENSE).
 
 ## Customization
 
+### Server moderation
+
+The server rejects messages containing its built-in severe-slur blocklist before
+they are broadcast or saved in global/team chat history. The same filter rejects
+new player names containing blocked terms. Ordinary profanity and gameplay trash
+talk are not blocked by default.
+
+To add your own server rules, create a UTF-8 text file with one word per line
+and start the server with `SHAZCHAT_BLOCKED_WORDS_FILE` set to that file's full
+path. Lines beginning with `#` are comments. Keep community-specific lists on
+the server rather than committing them to the public repository.
+
 ### Change Timer Presets
 
 Edit `main.py` and find:

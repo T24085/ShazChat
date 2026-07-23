@@ -12,6 +12,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from moderation import contains_blocked_term
+
 ACCOUNT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,32}$")
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 128
@@ -28,6 +30,8 @@ def normalize_name(username: str) -> str:
     name = str(username or "").strip()
     if not ACCOUNT_NAME_RE.fullmatch(name):
         raise AccountError("Use 3–32 letters, numbers, dots, dashes, or underscores for your player name.")
+    if contains_blocked_term(name):
+        raise AccountError("That player name is not allowed.")
     return name
 
 
