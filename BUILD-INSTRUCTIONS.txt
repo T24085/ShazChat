@@ -1,0 +1,32 @@
+HOW TO BUILD THE EXECUTABLE FOR DISTRIBUTION
+=============================================
+
+STEP 1: Build the Executable
+-----------------------------
+Double-click: build-exe-simple.bat
+
+This will:
+- Install PyInstaller if needed
+- Build ShazChat.exe in the 'dist' folder
+- Take 2-5 minutes on first run
+
+STEP 2: Create Distribution Package
+------------------------------------
+Double-click: PACKAGE-FOR-DISTRIBUTION.bat
+
+This will:
+- Copy all needed files to 'ShazChat-Distribution' folder
+- Ready for zipping and sharing
+
+STEP 3: Share with Team
+------------------------
+1. Zip the 'ShazChat-Distribution' folder
+2. Share the zip file
+3. Teammates extract and double-click ShazChat.bat
+
+TROUBLESHOOTING:
+- If build fails, make sure all dependencies are installed:
+  pip install PyQt6 keyboard pywin32 websockets pyinstaller
+
+- If antivirus blocks the .exe, add an exception
+- The first build takes longer than subsequent builds

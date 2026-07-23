@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local testing
+*.log
+
+# Never commit the Capper Times release signing key.
+release-signing-key.pem
+server-data/
+
+# Release artifacts and generated PyInstaller output.
+release/
+release-*/
+dist/
+CapperTimer-Distribution/
+ShazChat-Distribution/
+experiments/**/build*/
+
+# Local-only test traffic tools must not be pointed at the public server.
+full_server_test.py
+tools/live_chat_test.py
+
+# Local credentials and environment configuration.
+.env
+.env.*
+*.pem
+*.key
+
+# Executables
+*.exe
