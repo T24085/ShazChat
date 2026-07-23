@@ -20,6 +20,7 @@ import os
 import ctypes
 import subprocess
 import shutil
+import html
 from ctypes import wintypes
 import logging
 from logging.handlers import RotatingFileHandler
@@ -341,10 +342,10 @@ class WebSocketClient:
             except Exception as e:
                 print(f"Failed to send: {e}")
 
-    async def send_auth(self, username, password, create=False, recovery_pin=""):
+    async def send_auth(self, username, password, create=False, recovery_pin="", name_color="#61A8FF"):
         if self.websocket and self.running:
             try:
-                await self.websocket.send(json.dumps({"cmd": "auth", "username": username, "password": password, "create": bool(create), "recovery_pin": recovery_pin}))
+                await self.websocket.send(json.dumps({"cmd": "auth", "username": username, "password": password, "create": bool(create), "recovery_pin": recovery_pin, "name_color": name_color}))
             except Exception as e:
                 print(f"Failed to authenticate: {e}")
 
@@ -430,6 +431,13 @@ class WebSocketClient:
                 await self.websocket.send(json.dumps({"cmd": "chat_send", "scope": scope, "text": text}))
             except Exception as e:
                 print(f"Failed to send chat: {e}")
+
+    async def send_profile_style(self, name_color):
+        if self.websocket and self.running:
+            try:
+                await self.websocket.send(json.dumps({"cmd": "profile_style", "name_color": name_color}))
+            except Exception as e:
+                print(f"Failed to update profile style: {e}")
 
     def close(self):
         """Close connection"""
@@ -734,6 +742,8 @@ class ChatWindow(QtWidgets.QWidget):
         self.messages = {"global": [], "team": []}
         self.unread = {"global": False, "team": False}
         self._alert_active = False
+        self._font_size = 12
+        self._text_color = "#F8FBFF"
         self.setWindowTitle("ShazChat")
         self.setWindowFlags(
             QtCore.Qt.WindowType.WindowStaysOnTopHint
@@ -854,8 +864,31 @@ class ChatWindow(QtWidgets.QWidget):
             name = str(message.get("name") or "Player")
             text = str(message.get("text") or "")
             timestamp = str(message.get("timestamp") or "")
-            self.feed.addItem(f"{timestamp}  {name}: {text}")
+            name_color = self._valid_color(message.get("name_color"), "#61A8FF")
+            channel_color = "#42D2B1" if self.scope == "team" else "#61A8FF"
+            label = QtWidgets.QLabel(
+                f'<span style="color:{channel_color}; font-weight:700;">{html.escape(timestamp)}</span> '
+                f'<span style="color:{name_color}; font-weight:700;">{html.escape(name)}:</span> '
+                f'<span style="color:{self._text_color};">{html.escape(text)}</span>'
+            )
+            label.setTextFormat(QtCore.Qt.TextFormat.RichText)
+            label.setWordWrap(True)
+            label.setStyleSheet(f"background: transparent; padding: 3px 4px; font-size: {self._font_size}px;")
+            item = QtWidgets.QListWidgetItem()
+            item.setSizeHint(QtCore.QSize(1, max(30, label.sizeHint().height() + 8)))
+            self.feed.addItem(item)
+            self.feed.setItemWidget(item, label)
         self.feed.scrollToBottom()
+
+    @staticmethod
+    def _valid_color(value, fallback):
+        color = QtGui.QColor(str(value or ""))
+        return color.name().upper() if color.isValid() else fallback
+
+    def set_appearance(self, font_size, text_color):
+        self._font_size = max(10, min(24, int(font_size)))
+        self._text_color = self._valid_color(text_color, "#F8FBFF")
+        self._render()
 
     def _send(self):
         text = self.input.text().strip()
@@ -897,6 +930,8 @@ class ChatOverlayWindow(QtWidgets.QWidget):
         super().__init__()
         self._messages = []
         self._alert_active = False
+        self._font_size = 12
+        self._text_color = "#F8FBFF"
         self.setWindowTitle("ShazChat Overlay")
         self.setWindowFlags(
             QtCore.Qt.WindowType.FramelessWindowHint
@@ -939,18 +974,30 @@ class ChatOverlayWindow(QtWidgets.QWidget):
         channel = "TEAM" if scope == "team" else "GLOBAL"
         return f"{channel}  {name}: {text}"
 
+    def _message_markup(self, scope, name, text, name_color):
+        channel = "TEAM" if scope == "team" else "GLOBAL"
+        channel_color = "#42D2B1" if scope == "team" else "#61A8FF"
+        color = QtGui.QColor(str(name_color or ""))
+        safe_name_color = color.name().upper() if color.isValid() else "#61A8FF"
+        return (
+            f'<span style="color:{channel_color}; font-weight:700;">{channel}</span>  '
+            f'<span style="color:{safe_name_color}; font-weight:700;">{html.escape(name)}:</span> '
+            f'<span style="color:{self._text_color};">{html.escape(text)}</span>'
+        )
+
+    def _message_document(self, scope, name, text, name_color):
+        document = QtGui.QTextDocument()
+        document.setDefaultFont(QtGui.QFont("Segoe UI", self._font_size, QtGui.QFont.Weight.DemiBold))
+        document.setDocumentMargin(0)
+        document.setTextWidth(self.width() - 42)
+        document.setHtml(self._message_markup(scope, name, text, name_color))
+        return document
+
     def _message_heights(self):
-        font = QtGui.QFont("Segoe UI", 12, QtGui.QFont.Weight.DemiBold)
-        metrics = QtGui.QFontMetrics(font)
-        text_width = self.width() - 42
         heights = []
-        for scope, name, text in self._messages:
-            bounds = metrics.boundingRect(
-                QtCore.QRect(0, 0, text_width, 2000),
-                QtCore.Qt.TextFlag.TextWordWrap,
-                self._message_text(scope, name, text),
-            )
-            heights.append(max(self.MIN_CARD_HEIGHT, bounds.height() + self.CARD_VERTICAL_PADDING))
+        for scope, name, text, name_color in self._messages:
+            document = self._message_document(scope, name, text, name_color)
+            heights.append(max(self.MIN_CARD_HEIGHT, int(document.size().height()) + self.CARD_VERTICAL_PADDING))
         return heights
 
     def _resize_for_messages(self):
@@ -966,7 +1013,8 @@ class ChatOverlayWindow(QtWidgets.QWidget):
         text = str(message.get("text") or "").strip()[:220]
         if not text:
             return
-        self._messages.append((scope, name, text))
+        name_color = str(message.get("name_color") or "#61A8FF")
+        self._messages.append((scope, name, text, name_color))
         self._messages = self._messages[-self.MAX_MESSAGES:]
         self._resize_for_messages()
         self._alert_active = True
@@ -977,6 +1025,13 @@ class ChatOverlayWindow(QtWidgets.QWidget):
 
     def _fade_to_idle(self):
         self._alert_active = False
+        self.update()
+
+    def set_appearance(self, font_size, text_color):
+        self._font_size = max(10, min(24, int(font_size)))
+        color = QtGui.QColor(str(text_color or ""))
+        self._text_color = color.name().upper() if color.isValid() else "#F8FBFF"
+        self._resize_for_messages()
         self.update()
 
     def paintEvent(self, event):
@@ -993,7 +1048,7 @@ class ChatOverlayWindow(QtWidgets.QWidget):
         panel_alpha = 180 if self._alert_active else 70
         message_heights = self._message_heights()
         top = 6
-        for index, (scope, name, text) in enumerate(self._messages):
+        for index, (scope, name, text, name_color) in enumerate(self._messages):
             card_height = message_heights[index]
             rect = QtCore.QRect(6, top, self.width() - 12, card_height)
             accent = QtGui.QColor("#42D2B1" if scope == "team" else "#61A8FF")
@@ -1001,13 +1056,11 @@ class ChatOverlayWindow(QtWidgets.QWidget):
             painter.setPen(QtGui.QPen(QtGui.QColor(accent.red(), accent.green(), accent.blue(), 210 if self._alert_active else 100), 1))
             painter.drawRoundedRect(rect, 8, 8)
             painter.fillRect(QtCore.QRect(rect.x(), rect.y(), 5, rect.height()), accent)
-            painter.setFont(QtGui.QFont("Segoe UI", 12, QtGui.QFont.Weight.DemiBold))
-            painter.setPen(QtGui.QColor("#F8FBFF"))
-            painter.drawText(
-                rect.adjusted(14, 6, -10, -6),
-                QtCore.Qt.TextFlag.TextWordWrap,
-                self._message_text(scope, name, text),
-            )
+            document = self._message_document(scope, name, text, name_color)
+            painter.save()
+            painter.translate(rect.x() + 14, rect.y() + 6)
+            document.drawContents(painter)
+            painter.restore()
             top += card_height + self.CARD_GAP
         painter.end()
 
@@ -1085,6 +1138,29 @@ class SettingsWindow(QtWidgets.QWidget):
         self.compatibility_mode.setToolTip("Unchecked is the normal setting: timer and chat overlays start with the app. Check this only if a game becomes unstable.")
         player_form.addRow("Game safety", self.compatibility_mode)
 
+        chat_form = QtWidgets.QFormLayout()
+        chat_form.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        chat_form.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        chat_form.setHorizontalSpacing(14)
+        chat_form.setVerticalSpacing(10)
+        self.chat_font_size = QtWidgets.QSpinBox()
+        self.chat_font_size.setRange(10, 24)
+        self.chat_font_size.setValue(12)
+        self.chat_font_size.setSuffix(" px")
+        self.chat_text_color = "#F8FBFF"
+        self.chat_name_color = "#61A8FF"
+        self.chat_text_color_btn = QtWidgets.QPushButton()
+        self.chat_name_color_btn = QtWidgets.QPushButton()
+        self.chat_text_color_btn.clicked.connect(lambda: self._choose_chat_color("text"))
+        self.chat_name_color_btn.clicked.connect(lambda: self._choose_chat_color("name"))
+        self._update_chat_color_buttons()
+        chat_form.addRow("Chat font size", self.chat_font_size)
+        chat_form.addRow("Message color", self.chat_text_color_btn)
+        chat_form.addRow("Your name color", self.chat_name_color_btn)
+        chat_hint = QtWidgets.QLabel("Team channel labels stay green. Your name color is shown to everyone who sees your chat messages.")
+        chat_hint.setWordWrap(True)
+        chat_form.addRow("", chat_hint)
+
         update_row = QtWidgets.QHBoxLayout()
         self.update_status = QtWidgets.QLabel(f"Version {APP_VERSION}")
         self.update_button = QtWidgets.QPushButton("Check for updates")
@@ -1130,6 +1206,8 @@ class SettingsWindow(QtWidgets.QWidget):
         player_group.setLayout(player_form)
         timer_group = QtWidgets.QGroupBox("Timer Controls")
         timer_group.setLayout(timer_form)
+        chat_group = QtWidgets.QGroupBox("Chat appearance")
+        chat_group.setLayout(chat_form)
 
         room_group = QtWidgets.QGroupBox("Room")
         room_form = QtWidgets.QFormLayout()
@@ -1206,6 +1284,7 @@ class SettingsWindow(QtWidgets.QWidget):
 
         self.tabs.addTab(tab_page(player_group), "Settings")
         self.tabs.addTab(tab_page(timer_group), "Timers")
+        self.tabs.addTab(tab_page(chat_group), "Chat")
         self.tabs.addTab(tab_page(room_group, role_group, roster_group), "Roles / Team")
         self.tabs.addTab(tab_page(account_group), "Account")
         root_layout.addWidget(self.tabs, 1)
@@ -1366,6 +1445,7 @@ class SettingsWindow(QtWidgets.QWidget):
         for selector in (self.monitor_select, self.map_select, self.room_select):
             selector.currentIndexChanged.connect(self._queue_auto_apply)
         self.compatibility_mode.toggled.connect(self._queue_auto_apply)
+        self.chat_font_size.valueChanged.connect(self._queue_auto_apply)
         for button in self.role_buttons.values():
             button.toggled.connect(self._queue_auto_apply)
 
@@ -1577,6 +1657,28 @@ class SettingsWindow(QtWidgets.QWidget):
         if not self._suspend_auto_apply:
             self._auto_apply_timer.start()
 
+    def _update_chat_color_buttons(self):
+        for button, color, label in (
+            (self.chat_text_color_btn, self.chat_text_color, "Message color"),
+            (self.chat_name_color_btn, self.chat_name_color, "Your name color"),
+        ):
+            button.setText(f"{label}: {color}")
+            button.setStyleSheet(
+                f"QPushButton {{ background-color: {color}; color: {'#101820' if QtGui.QColor(color).lightness() > 150 else '#FFFFFF'}; }}"
+            )
+
+    def _choose_chat_color(self, target):
+        current = self.chat_text_color if target == "text" else self.chat_name_color
+        color = QtWidgets.QColorDialog.getColor(QtGui.QColor(current), self, "Choose chat color")
+        if not color.isValid():
+            return
+        if target == "text":
+            self.chat_text_color = color.name().upper()
+        else:
+            self.chat_name_color = color.name().upper()
+        self._update_chat_color_buttons()
+        self._queue_auto_apply()
+
     def _apply_current_settings(self):
         times_text_1 = self.times_input_1.text().strip()
         player_name = self.name_input.text().strip()
@@ -1598,6 +1700,9 @@ class SettingsWindow(QtWidgets.QWidget):
             self._current_role(),
             player_name,
             self.compatibility_mode.isChecked(),
+            self.chat_font_size.value(),
+            self.chat_text_color,
+            self.chat_name_color,
         )
 
     def _load_presets(self):
@@ -1620,6 +1725,10 @@ class SettingsWindow(QtWidgets.QWidget):
         # Gameplay overlays are the default. The only persisted exception is an
         # explicit opt-out from the player through the compatibility checkbox.
         compatibility_mode = bool(presets.get("_compatibility_mode", False))
+        self.chat_font_size.setValue(max(10, min(24, int(presets.get("_chat_font_size", 12)))))
+        self.chat_text_color = str(presets.get("_chat_text_color") or "#F8FBFF")
+        self.chat_name_color = str(presets.get("_chat_name_color") or "#61A8FF")
+        self._update_chat_color_buttons()
         blocker = QtCore.QSignalBlocker(self.compatibility_mode)
         self.compatibility_mode.setChecked(compatibility_mode)
         del blocker
@@ -1680,6 +1789,13 @@ class SettingsWindow(QtWidgets.QWidget):
     def _save_chat_hotkey(self, hotkey):
         presets = self._load_presets()
         presets["_chat_hotkey"] = str(hotkey or CHAT_HOTKEY).strip().lower()
+        self._save_presets(presets)
+
+    def _save_chat_appearance(self, font_size, text_color, name_color):
+        presets = self._load_presets()
+        presets["_chat_font_size"] = int(font_size)
+        presets["_chat_text_color"] = str(text_color)
+        presets["_chat_name_color"] = str(name_color)
         self._save_presets(presets)
 
     def _on_load_preset(self):
@@ -2016,6 +2132,9 @@ class CapTimerApp:
         self.monitor_index = 0
         self.selected_map = "Custom"
         self.player_name = ""
+        self.chat_font_size = 12
+        self.chat_text_color = "#F8FBFF"
+        self.chat_name_color = "#61A8FF"
         self.player_id = MY_ID
         self.authenticated = not bool(server_url)
         self.account_dialog = None
@@ -2323,6 +2442,9 @@ class CapTimerApp:
         role: Optional[str] = None,
         player_name: Optional[str] = None,
         compatibility_mode: Optional[bool] = None,
+        chat_font_size: Optional[int] = None,
+        chat_text_color: Optional[str] = None,
+        chat_name_color: Optional[str] = None,
     ):
         global HOTKEY_1, HOTKEY_2, CHAT_HOTKEY, TIMER_OPTIONS_1, TIMER_OPTIONS_2
         with self.lock:
@@ -2380,6 +2502,21 @@ class CapTimerApp:
                 self.settings._save_player_name(self.player_name)
             if compatibility_mode is not None:
                 self.set_compatibility_mode(compatibility_mode)
+            if chat_font_size is not None and chat_text_color and chat_name_color:
+                self.chat_font_size = max(10, min(24, int(chat_font_size)))
+                text_color = QtGui.QColor(chat_text_color)
+                name_color = QtGui.QColor(chat_name_color)
+                self.chat_text_color = text_color.name().upper() if text_color.isValid() else "#F8FBFF"
+                self.chat_name_color = name_color.name().upper() if name_color.isValid() else "#61A8FF"
+                self.chat.set_appearance(self.chat_font_size, self.chat_text_color)
+                self.chat_overlay.set_appearance(self.chat_font_size, self.chat_text_color)
+                self.settings._save_chat_appearance(
+                    self.chat_font_size, self.chat_text_color, self.chat_name_color
+                )
+                if self.authenticated and self.ws_client and self.ws_client.running:
+                    asyncio.run_coroutine_threadsafe(
+                        self.ws_client.send_profile_style(self.chat_name_color), self.ws_loop
+                    )
             if role:
                 if role in LOCKED_ROLES:
                     if self.role_owners.get(role) == self.player_id or self.role_owners.get(role) is None:
@@ -2415,7 +2552,7 @@ class CapTimerApp:
                 self.account_dialog.show_error("Still connecting to the ShazChat server.")
             return
         asyncio.run_coroutine_threadsafe(
-            self.ws_client.send_auth(username, password, create, recovery_pin), self.ws_loop
+            self.ws_client.send_auth(username, password, create, recovery_pin, self.chat_name_color), self.ws_loop
         )
 
     def submit_password_reset(self, username, recovery_pin, new_password):

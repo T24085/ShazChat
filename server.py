@@ -11,6 +11,7 @@ import os
 import secrets
 import time
 from collections import deque
+import re
 
 import websockets
 
@@ -40,6 +41,8 @@ CHAT_RATE_LIMIT = 6
 CHAT_RATE_WINDOW_SECONDS = 10
 MAX_WEBSOCKET_MESSAGE_BYTES = 16_384
 SEND_TIMEOUT_SECONDS = 3
+DEFAULT_NAME_COLOR = "#61A8FF"
+CHAT_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 clients = set()
 rooms = {room_id: set() for room_id in range(1, MAX_ROOMS + 1)}
@@ -59,6 +62,11 @@ BLOCKED_TERMS = load_blocked_terms()
 def _clean_name(value):
     name = str(value or "").strip()
     return name[:32] or "Player"
+
+
+def _clean_chat_color(value):
+    color = str(value or "").strip()
+    return color.upper() if CHAT_COLOR_RE.fullmatch(color) else DEFAULT_NAME_COLOR
 
 
 def _password_record(password):
@@ -192,11 +200,13 @@ async def _broadcast_team_directory():
 
 
 def _chat_payload(scope, websocket, text, room=None):
+    profile = client_profiles.get(websocket, {})
     return {
         "cmd": "chat_message",
         "scope": scope,
         "room": room,
-        "name": _clean_name(client_profiles.get(websocket, {}).get("name")),
+        "name": _clean_name(profile.get("name")),
+        "name_color": _clean_chat_color(profile.get("name_color")),
         "text": text,
         "timestamp": time.strftime("%H:%M", time.localtime()),
     }
@@ -337,7 +347,15 @@ async def _handle_auth(websocket, data):
         return
     _clear_account_attempts(websocket)
     profile = client_profiles.setdefault(websocket, {})
-    profile.update({"authenticated": True, "id": account["id"], "name": account["name"], "role": "Player"})
+    profile.update(
+        {
+            "authenticated": True,
+            "id": account["id"],
+            "name": account["name"],
+            "name_color": _clean_chat_color(data.get("name_color")),
+            "role": "Player",
+        }
+    )
     await websocket.send(json.dumps({"cmd": "auth_result", "ok": True, "id": account["id"], "name": account["name"]}))
     logger.info("Authenticated player: %s", account["name"])
 
@@ -480,6 +498,8 @@ async def handle_client(websocket):
                     if room and role in ("Offense", "Defense"):
                         client_profiles[websocket]["role"] = role
                         await _broadcast_room_state(room)
+                elif cmd == "profile_style":
+                    client_profiles[websocket]["name_color"] = _clean_chat_color(data.get("name_color"))
                 elif cmd == "set_room_password":
                     room = client_room.get(websocket)
                     password = str(data.get("password") or "").strip()
