@@ -20,13 +20,16 @@ CHAT
 - The lower-left ShazChat panel stays on top of the game.
 - Use the title-bar minimize button if you want to hide the full chat panel on a
   one-monitor setup; the lightweight click-through message overlay stays available.
+- Drag any edge or corner of the full chat panel to resize it. It starts compact
+  but can be made larger for easier reading.
 - Switch between Global and My Team. Global messages reach all connected players;
   My Team messages are visible only to the people in your selected team.
 - Severe slurs are blocked by the server before they can be sent, saved, or shown
   to other players. Normal gameplay banter is still allowed.
 - Press Enter or Send to post a message.
 - Timer hotkeys automatically pause while you type in chat or a settings field,
-  then immediately return when you click back into the game.
+  then immediately return when you click back into the game. Your timer and chat
+  keybind letters can be typed normally in the chat box.
 - Starting a timer never brings ShazChat to the foreground or takes focus
   away from the game.
 - Timer hotkeys work while movement or other gameplay keys are held down.

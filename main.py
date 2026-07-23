@@ -743,7 +743,10 @@ class ChatWindow(QtWidgets.QWidget):
             | QtCore.Qt.WindowType.WindowMinimizeButtonHint
             | QtCore.Qt.WindowType.WindowCloseButtonHint
         )
-        self.setFixedSize(360, 300)
+        # Keep the compact default, but let one-monitor players make the panel
+        # as large or small as their setup needs.
+        self.setMinimumSize(300, 230)
+        self.resize(360, 300)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self._alert_timer = QtCore.QTimer(self)
         self._alert_timer.setSingleShot(True)
@@ -863,6 +866,14 @@ class ChatWindow(QtWidgets.QWidget):
         self.app.finish_chat_entry()
 
     def eventFilter(self, watched, event):
+        if watched is self.input and event.type() in (
+            QtCore.QEvent.Type.FocusIn,
+            QtCore.QEvent.Type.FocusOut,
+        ):
+            # QApplication.focusChanged can briefly report no focused widget
+            # while a Tool window is activated. Synchronize after Qt completes
+            # the transition so registered global keys never steal typed text.
+            QtCore.QTimer.singleShot(0, self.app._sync_text_entry_focus)
         if (
             watched is self.input
             and event.type() == QtCore.QEvent.Type.KeyPress
@@ -2202,7 +2213,13 @@ class CapTimerApp:
         return isinstance(widget, QtWidgets.QComboBox) and widget.isEditable()
 
     def _handle_focus_change(self, _old, current):
-        typing = self._is_text_entry(current)
+        self._sync_text_entry_focus(current)
+
+    def _sync_text_entry_focus(self, current=None):
+        """Suspend global keys whenever any ShazChat text field is focused."""
+        typing = self.chat.input.hasFocus() or self._is_text_entry(
+            current if current is not None else self.app.focusWidget()
+        )
         if typing == self._text_entry_focused:
             return
         self._text_entry_focused = typing
