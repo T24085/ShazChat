@@ -65,6 +65,7 @@ except Exception:
 HOTKEY_1 = "v"             # key to press for capper 1
 HOTKEY_2 = "b"             # key to press for capper 2
 CHAT_HOTKEY = "enter"      # key to open the chat composer during gameplay
+OVERLAY_TOGGLE_HOTKEY = "f10"  # show/hide timer and click-through chat overlays
 TIMER_OPTIONS_1 = [35, 25, 20]  # cycle order as requested
 TIMER_OPTIONS_2 = [35, 25, 20]
 CAP_COLORS = ["#00FF00", "#7A3DF0"]
@@ -1329,12 +1330,14 @@ class SettingsWindow(QtWidgets.QWidget):
         self.times_input_2.setPlaceholderText("Capper 2 times (e.g., 35,25,20)")
         self.hotkey_input_2 = HotkeyCaptureEdit()
         self.chat_hotkey_input = HotkeyCaptureEdit()
+        self.overlay_hotkey_input = HotkeyCaptureEdit()
 
         timer_form.addRow("Capper 1 times", self.times_input_1)
         timer_form.addRow("Capper 1 hotkey", self.hotkey_input_1)
         timer_form.addRow("Capper 2 times", self.times_input_2)
         timer_form.addRow("Capper 2 hotkey", self.hotkey_input_2)
         timer_form.addRow("Open chat hotkey", self.chat_hotkey_input)
+        timer_form.addRow("Toggle overlays hotkey", self.overlay_hotkey_input)
 
         self.monitor_select = QtWidgets.QComboBox()
         self._refresh_monitors()
@@ -1387,6 +1390,7 @@ class SettingsWindow(QtWidgets.QWidget):
             self.times_input_2,
             self.hotkey_input_2,
             self.chat_hotkey_input,
+            self.overlay_hotkey_input,
             self.monitor_select,
             self.map_select,
             self.room_select,
@@ -1651,6 +1655,7 @@ class SettingsWindow(QtWidgets.QWidget):
             self.times_input_2,
             self.hotkey_input_2,
             self.chat_hotkey_input,
+            self.overlay_hotkey_input,
         ):
             input_widget.textChanged.connect(self._queue_auto_apply)
         for selector in (self.monitor_select, self.map_select, self.room_select):
@@ -1834,6 +1839,7 @@ class SettingsWindow(QtWidgets.QWidget):
         times_2,
         hotkey_2,
         chat_hotkey,
+        overlay_hotkey,
         monitor_index,
         room,
         map_name=None,
@@ -1849,6 +1855,7 @@ class SettingsWindow(QtWidgets.QWidget):
             self.times_input_2.setText(",".join(str(t) for t in times_2))
             self.hotkey_input_2.setText(hotkey_2)
             self.chat_hotkey_input.setText(chat_hotkey)
+            self.overlay_hotkey_input.setText(overlay_hotkey)
             if 0 <= monitor_index < self.monitor_select.count():
                 self.monitor_select.setCurrentIndex(monitor_index)
             if map_name and map_name in MAP_PRESETS:
@@ -1893,6 +1900,7 @@ class SettingsWindow(QtWidgets.QWidget):
         times_text_2 = self.times_input_2.text().strip()
         hotkey_text_2 = self.hotkey_input_2.text().strip().lower()
         chat_hotkey_text = self.chat_hotkey_input.text().strip().lower()
+        overlay_hotkey_text = self.overlay_hotkey_input.text().strip().lower()
         monitor_index = int(self.monitor_select.currentData())
         room = int(self.room_select.currentData())
         self.app.update_settings(
@@ -1901,6 +1909,7 @@ class SettingsWindow(QtWidgets.QWidget):
             times_text_2,
             hotkey_text_2,
             chat_hotkey_text,
+            overlay_hotkey_text,
             monitor_index,
             room,
             self.map_select.currentText(),
@@ -1927,6 +1936,7 @@ class SettingsWindow(QtWidgets.QWidget):
         last_map = presets.get("_last_map")
         last_room = presets.get("_last_room")
         self.chat_hotkey_input.setText(presets.get("_chat_hotkey", CHAT_HOTKEY))
+        self.overlay_hotkey_input.setText(presets.get("_overlay_toggle_hotkey", OVERLAY_TOGGLE_HOTKEY))
         player_name = str(presets.get("_player_name") or "").strip()
         # Gameplay overlays are the default. The only persisted exception is an
         # explicit opt-out from the player through the compatibility checkbox.
@@ -1952,6 +1962,7 @@ class SettingsWindow(QtWidgets.QWidget):
                 self.times_input_2.setText(preset.get("times_2", ""))
                 self.hotkey_input_2.setText(preset.get("hotkey_2", HOTKEY_2))
                 self.chat_hotkey_input.setText(presets.get("_chat_hotkey", CHAT_HOTKEY))
+                self.overlay_hotkey_input.setText(presets.get("_overlay_toggle_hotkey", OVERLAY_TOGGLE_HOTKEY))
                 monitor_index = int(preset.get("monitor_index", 0))
                 if 0 <= monitor_index < self.monitor_select.count():
                     self.monitor_select.setCurrentIndex(monitor_index)
@@ -1996,6 +2007,11 @@ class SettingsWindow(QtWidgets.QWidget):
         presets["_chat_hotkey"] = str(hotkey or CHAT_HOTKEY).strip().lower()
         self._save_presets(presets)
 
+    def _save_overlay_hotkey(self, hotkey):
+        presets = self._load_presets()
+        presets["_overlay_toggle_hotkey"] = str(hotkey or OVERLAY_TOGGLE_HOTKEY).strip().lower()
+        self._save_presets(presets)
+
     def _save_chat_appearance(self, font_size, text_color):
         presets = self._load_presets()
         presets["_chat_font_size"] = int(font_size)
@@ -2013,6 +2029,7 @@ class SettingsWindow(QtWidgets.QWidget):
         self.times_input_2.setText(preset.get("times_2", ""))
         self.hotkey_input_2.setText(preset.get("hotkey_2", HOTKEY_2))
         self.chat_hotkey_input.setText(presets.get("_chat_hotkey", CHAT_HOTKEY))
+        self.overlay_hotkey_input.setText(presets.get("_overlay_toggle_hotkey", OVERLAY_TOGGLE_HOTKEY))
         monitor_index = int(preset.get("monitor_index", 0))
         if 0 <= monitor_index < self.monitor_select.count():
             self.monitor_select.setCurrentIndex(monitor_index)
@@ -2031,6 +2048,7 @@ class SettingsWindow(QtWidgets.QWidget):
             "monitor_index": int(self.monitor_select.currentData()),
         }
         presets["_chat_hotkey"] = self.chat_hotkey_input.text().strip().lower()
+        presets["_overlay_toggle_hotkey"] = self.overlay_hotkey_input.text().strip().lower()
         presets["_last_map"] = map_name
         presets["_last_role"] = self._current_role()
         self._save_presets(presets)
@@ -2324,6 +2342,9 @@ class CapTimerApp:
         self.cycle_index = [-1, -1]
         self.lock = threading.Lock()
         self.compatibility_mode_enabled = False
+        # This is intentionally session-only: overlays start visible on launch
+        # unless the player explicitly enables compatibility mode.
+        self.gameplay_overlays_hidden = False
         self._text_entry_focused = False
         # Linux listener callbacks arrive on a non-Qt thread; route both
         # platform backends through the dispatcher before touching the UI.
@@ -2333,7 +2354,7 @@ class CapTimerApp:
                 lambda hotkey_id=hotkey_id: self._on_registered_hotkey(hotkey_id)
             ),
         )
-        self._hotkey_down = {1: False, 2: False, 3: False}
+        self._hotkey_down = {1: False, 2: False, 3: False, 4: False}
         self._last_hotkey_fire = 0.0
         self._game_window_handle = 0
         self._hotkey_poll_timer = QtCore.QTimer(self.app)
@@ -2501,6 +2522,8 @@ class CapTimerApp:
             self._fire_hotkey(hotkey_id)
         elif hotkey_id == 3:
             self.open_chat_composer()
+        elif hotkey_id == 4:
+            self.toggle_gameplay_overlays()
 
     def _fire_hotkey(self, hotkey_id):
         """Trigger once when either Windows hotkey path observes the key press."""
@@ -2522,14 +2545,16 @@ class CapTimerApp:
     def _poll_held_hotkeys(self):
         """Fallback for games that suppress RegisterHotKey while other keys are held."""
         if self.compatibility_mode_enabled or self._text_entry_focused:
-            self._hotkey_down = {1: False, 2: False, 3: False}
+            self._hotkey_down = {1: False, 2: False, 3: False, 4: False}
             return
-        for hotkey_id, key in ((1, HOTKEY_1), (2, HOTKEY_2), (3, CHAT_HOTKEY)):
+        for hotkey_id, key in ((1, HOTKEY_1), (2, HOTKEY_2), (3, CHAT_HOTKEY), (4, OVERLAY_TOGGLE_HOTKEY)):
             virtual_key = NativeHotkeyManager._virtual_key(key)
             down = bool(virtual_key is not None and self._key_is_held(virtual_key))
             if down and not self._hotkey_down.get(hotkey_id, False):
                 if hotkey_id == 3:
                     self.open_chat_composer()
+                elif hotkey_id == 4:
+                    self.toggle_gameplay_overlays()
                 else:
                     self._fire_hotkey(hotkey_id)
             self._hotkey_down[hotkey_id] = down
@@ -2559,7 +2584,8 @@ class CapTimerApp:
         self.hotkey_manager.unregister(1)
         self.hotkey_manager.unregister(2)
         self.hotkey_manager.unregister(3)
-        self._hotkey_down = {1: False, 2: False, 3: False}
+        self.hotkey_manager.unregister(4)
+        self._hotkey_down = {1: False, 2: False, 3: False, 4: False}
         self._hotkey_poll_timer.stop()
         if self.compatibility_mode_enabled:
             self.logger.info("Compatibility mode enabled; global hotkeys are disabled")
@@ -2574,7 +2600,7 @@ class CapTimerApp:
         if sys.platform.startswith("win"):
             self._hotkey_poll_timer.start()
         failures = []
-        for hotkey_id, key in ((1, HOTKEY_1), (2, HOTKEY_2), (3, CHAT_HOTKEY)):
+        for hotkey_id, key in ((1, HOTKEY_1), (2, HOTKEY_2), (3, CHAT_HOTKEY), (4, OVERLAY_TOGGLE_HOTKEY)):
             ok, reason = self.hotkey_manager.register(hotkey_id, key)
             if not ok:
                 failures.append(reason)
@@ -2584,7 +2610,7 @@ class CapTimerApp:
             self.update_status(message)
         else:
             backend = "Windows registered" if sys.platform.startswith("win") else "Linux listener"
-            self.logger.info("%s hotkeys enabled: %s, %s, %s", backend, HOTKEY_1, HOTKEY_2, CHAT_HOTKEY)
+            self.logger.info("%s hotkeys enabled: %s, %s, %s, %s", backend, HOTKEY_1, HOTKEY_2, CHAT_HOTKEY, OVERLAY_TOGGLE_HOTKEY)
 
     def open_chat_composer(self):
         """Focus chat only when the player explicitly uses the chat hotkey."""
@@ -2627,9 +2653,28 @@ class CapTimerApp:
             self.chat_overlay.hide()
             self.update_status("Compatibility mode: gameplay overlays and global hotkeys are disabled")
         else:
+            self._set_gameplay_overlays_visible(not self.gameplay_overlays_hidden)
+            self.update_status("Compatibility mode off: registered hotkeys and overlays restored")
+
+    def _set_gameplay_overlays_visible(self, visible):
+        if self.compatibility_mode_enabled:
+            self.window.hide()
+            self.chat_overlay.hide()
+            return
+        if visible:
             self.position_window()
             self.chat_overlay.show()
-            self.update_status("Compatibility mode off: registered hotkeys and overlays restored")
+        else:
+            self.window.hide()
+            self.chat_overlay.hide()
+
+    def toggle_gameplay_overlays(self):
+        if self.compatibility_mode_enabled:
+            self.update_status("Compatibility mode already has gameplay overlays off")
+            return
+        self.gameplay_overlays_hidden = not self.gameplay_overlays_hidden
+        self._set_gameplay_overlays_visible(not self.gameplay_overlays_hidden)
+        self.update_status("Gameplay overlays hidden" if self.gameplay_overlays_hidden else "Gameplay overlays shown")
 
     def shutdown(self):
         self.logger.info("ShazChat shutting down")
@@ -2647,6 +2692,7 @@ class CapTimerApp:
         times_text_2: str,
         hotkey_text_2: str,
         chat_hotkey_text: str,
+        overlay_hotkey_text: str,
         monitor_index: int,
         room: int,
         map_name: Optional[str] = None,
@@ -2656,7 +2702,7 @@ class CapTimerApp:
         chat_font_size: Optional[int] = None,
         chat_text_color: Optional[str] = None,
     ):
-        global HOTKEY_1, HOTKEY_2, CHAT_HOTKEY, TIMER_OPTIONS_1, TIMER_OPTIONS_2
+        global HOTKEY_1, HOTKEY_2, CHAT_HOTKEY, OVERLAY_TOGGLE_HOTKEY, TIMER_OPTIONS_1, TIMER_OPTIONS_2
         with self.lock:
             new_times_1 = []
             if times_text_1:
@@ -2696,6 +2742,10 @@ class CapTimerApp:
             if chat_hotkey_text and chat_hotkey_text != CHAT_HOTKEY:
                 CHAT_HOTKEY = chat_hotkey_text
                 self.settings._save_chat_hotkey(CHAT_HOTKEY)
+                hotkeys_changed = True
+            if overlay_hotkey_text and overlay_hotkey_text != OVERLAY_TOGGLE_HOTKEY:
+                OVERLAY_TOGGLE_HOTKEY = overlay_hotkey_text
+                self.settings._save_overlay_hotkey(OVERLAY_TOGGLE_HOTKEY)
                 hotkeys_changed = True
             if hotkeys_changed:
                 self._refresh_hotkeys()
@@ -2987,7 +3037,8 @@ class CapTimerApp:
 
     def handle_chat_message(self, scope, message):
         self.chat.add_message(scope, message)
-        self.chat_overlay.add_message(scope, message)
+        if not self.compatibility_mode_enabled and not self.gameplay_overlays_hidden:
+            self.chat_overlay.add_message(scope, message)
 
     def handle_team_directory(self, teams):
         self.settings.update_team_activity(teams)
@@ -3128,6 +3179,7 @@ class CapTimerApp:
             TIMER_OPTIONS_2,
             HOTKEY_2,
             CHAT_HOTKEY,
+            OVERLAY_TOGGLE_HOTKEY,
             self.monitor_index,
             self.room,
             self.selected_map,
@@ -3137,7 +3189,7 @@ class CapTimerApp:
         )
         self.settings.show()
         self.chat.show()
-        if not self.compatibility_mode_enabled:
+        if not self.compatibility_mode_enabled and not self.gameplay_overlays_hidden:
             self.chat_overlay.show()
 
     def run(self):
@@ -3174,15 +3226,15 @@ class CapTimerApp:
         print(f"Window positioned at ({x}, {y}) with size {w}x{h}")
         print(f"Screen size: {screen.width()}x{screen.height()}")
 
-        # Show window immediately so it's ready - make sure it's visible
-        self.window.show()
-        self.window.enable_click_through_after_show()
-        self.window.raise_()
-
-        # Ensure label is visible and properly sized
-        self.window.label.show()
-        self.window.label.setVisible(True)
-        self.window.label.resize(TIMER_WIDTH, WINDOW_HEIGHT)
+        if not self.gameplay_overlays_hidden and not self.compatibility_mode_enabled:
+            self.window.show()
+            self.window.enable_click_through_after_show()
+            self.window.raise_()
+            self.window.label.show()
+            self.window.label.setVisible(True)
+            self.window.label.resize(TIMER_WIDTH, WINDOW_HEIGHT)
+        else:
+            self.window.hide()
         chat_w = self.chat.width()
         chat_h = self.chat.height()
         self.chat.setGeometry(screen.x() + 18, screen.y() + screen.height() - chat_h - 18, chat_w, chat_h)
@@ -3201,6 +3253,7 @@ def parse_args():
     p.add_argument("--hotkey1", default=HOTKEY_1, help="Capper 1 hotkey (default: v)")
     p.add_argument("--hotkey2", default=HOTKEY_2, help="Capper 2 hotkey (default: b)")
     p.add_argument("--chat-hotkey", default=CHAT_HOTKEY, help="Open chat hotkey (default: enter)")
+    p.add_argument("--overlay-hotkey", default=OVERLAY_TOGGLE_HOTKEY, help="Toggle gameplay overlays (default: f10)")
     p.add_argument("--monitor", type=int, default=1, help="Monitor number (1 = primary)")
     return p.parse_args()
 
@@ -3210,6 +3263,7 @@ if __name__ == "__main__":
     HOTKEY_1 = args.hotkey1.lower()
     HOTKEY_2 = args.hotkey2.lower()
     CHAT_HOTKEY = args.chat_hotkey.lower()
+    OVERLAY_TOGGLE_HOTKEY = args.overlay_hotkey.lower()
     server_url = None if args.no_network else args.server
     app = CapTimerApp(
         network=(not args.no_network),
