@@ -46,8 +46,10 @@ except ImportError:
 # desktops intentionally restrict global keyboard capture.
 try:
     from pynput import keyboard as pynput_keyboard
+    from pynput import mouse as pynput_mouse
 except ImportError:
     pynput_keyboard = None
+    pynput_mouse = None
 
 # For click-through window on Windows:
 try:
@@ -147,7 +149,9 @@ class NativeHotkeyManager:
         self._qt_app = qt_app
         self._filter = None
         self._linux_listener = None
+        self._linux_mouse_listener = None
         self._linux_down = set()
+        self._poll_only = set()
         if sys.platform.startswith("win"):
             self._filter = NativeHotkeyFilter(callback)
             self._qt_app.installNativeEventFilter(self._filter)
@@ -160,9 +164,23 @@ class NativeHotkeyManager:
             "RETURN": 0x0D,
             "SPACE": 0x20,
             "TAB": 0x09,
+            "NUMPAD_ADD": 0x6B,
+            "NUMPAD_SUBTRACT": 0x6D,
+            "NUMPAD_MULTIPLY": 0x6A,
+            "NUMPAD_DIVIDE": 0x6F,
+            "NUMPAD_DECIMAL": 0x6E,
+            "MOUSE_LEFT": 0x01,
+            "MOUSE_RIGHT": 0x02,
+            "MOUSE_MIDDLE": 0x04,
+            "MOUSE4": 0x05,
+            "MOUSE5": 0x06,
         }
         if key in named_keys:
             return named_keys[key]
+        if key.startswith("NUMPAD") and key[6:].isdigit():
+            number = int(key[6:])
+            if 0 <= number <= 9:
+                return 0x60 + number
         if len(key) == 1 and ("A" <= key <= "Z" or "0" <= key <= "9"):
             return ord(key)
         if key.startswith("F") and key[1:].isdigit():
@@ -171,20 +189,34 @@ class NativeHotkeyManager:
                 return 0x70 + number - 1
         return None
 
+    @staticmethod
+    def _is_mouse_hotkey(key):
+        return str(key or "").strip().lower() in {
+            "mouse_left", "mouse_right", "mouse_middle", "mouse4", "mouse5"
+        }
+
     def register(self, hotkey_id, key):
         self.unregister(hotkey_id)
         if sys.platform.startswith("win"):
             virtual_key = self._virtual_key(key)
             if virtual_key is None:
-                return False, "Use Enter, Space, Tab, a letter, number, or F1–F24 key."
+                return False, "Use a key, numpad key, mouse button, or F1–F24 key."
+            if self._is_mouse_hotkey(key):
+                # RegisterHotKey does not accept mouse buttons. The existing
+                # physical-state polling path handles them reliably in games.
+                self._registered[hotkey_id] = key
+                self._poll_only.add(hotkey_id)
+                return True, None
             if not ctypes.windll.user32.RegisterHotKey(None, hotkey_id, self.MOD_NOREPEAT, virtual_key):
                 return False, f"'{key}' is already in use by Windows or another app."
             self._registered[hotkey_id] = key
             return True, None
         if sys.platform.startswith("linux"):
-            if self._linux_key(key) is None:
-                return False, "Use Enter, Space, Tab, a letter, number, or F1–F24 key."
-            if pynput_keyboard is None:
+            is_keyboard = self._linux_key(key) is not None
+            is_mouse = self._linux_mouse_button(key) is not None
+            if not is_keyboard and not is_mouse:
+                return False, "Use a key, numpad key, mouse button, or F1–F24 key."
+            if (is_keyboard and pynput_keyboard is None) or (is_mouse and pynput_mouse is None):
                 return False, "Linux hotkeys need pynput. Run: python3 -m pip install pynput"
             self._registered[hotkey_id] = key
             try:
@@ -210,12 +242,38 @@ class NativeHotkeyManager:
             return named_keys[normalized]
         if normalized.startswith("f") and normalized[1:].isdigit() and 1 <= int(normalized[1:]) <= 24:
             return normalized
+        if normalized.startswith("numpad") and normalized[6:].isdigit() and 0 <= int(normalized[6:]) <= 9:
+            return normalized
+        if normalized in {"numpad_decimal", "numpad_add", "numpad_subtract", "numpad_multiply", "numpad_divide"}:
+            return normalized
         return None
+
+    @staticmethod
+    def _linux_mouse_button(key):
+        return {
+            "mouse_left": "left",
+            "mouse_right": "right",
+            "mouse_middle": "middle",
+            "mouse4": "x1",
+            "mouse5": "x2",
+        }.get(str(key or "").strip().lower())
 
     def _matches_linux_key(self, pressed, configured):
         expected = self._linux_key(configured)
         if expected is None:
             return False
+        if expected.startswith("numpad"):
+            keypad_vks = {
+                "numpad_decimal": 65454,
+                "numpad_add": 65451,
+                "numpad_subtract": 65453,
+                "numpad_multiply": 65450,
+                "numpad_divide": 65455,
+            }
+            expected_vk = keypad_vks.get(expected)
+            if expected_vk is None:
+                expected_vk = 65456 + int(expected[6:])
+            return getattr(pressed, "vk", None) == expected_vk
         if isinstance(pressed, pynput_keyboard.KeyCode):
             return pressed.char is not None and pressed.char.lower() == expected
         return getattr(pressed, "name", "").lower() == expected
@@ -231,29 +289,47 @@ class NativeHotkeyManager:
             if self._matches_linux_key(released, configured):
                 self._linux_down.discard(hotkey_id)
 
+    def _on_linux_click(self, _x, _y, button, pressed):
+        button_name = getattr(button, "name", "").lower()
+        for hotkey_id, configured in tuple(self._registered.items()):
+            if self._linux_mouse_button(configured) != button_name:
+                continue
+            if pressed and hotkey_id not in self._linux_down:
+                self._linux_down.add(hotkey_id)
+                self._callback(hotkey_id)
+            elif not pressed:
+                self._linux_down.discard(hotkey_id)
+
     def _stop_linux_listener(self):
         listener, self._linux_listener = self._linux_listener, None
+        mouse_listener, self._linux_mouse_listener = self._linux_mouse_listener, None
         self._linux_down.clear()
         if listener is not None:
             listener.stop()
+        if mouse_listener is not None:
+            mouse_listener.stop()
 
     def _restart_linux_listener(self):
         self._stop_linux_listener()
         if not self._registered:
             return
-        self._linux_listener = pynput_keyboard.Listener(
-            on_press=self._on_linux_press,
-            on_release=self._on_linux_release,
-        )
-        self._linux_listener.start()
-        # Surface an unavailable display/session while registering, instead of
-        # silently leaving players with non-functional keys.
-        self._linux_listener.wait()
+        if any(self._linux_key(key) is not None for key in self._registered.values()):
+            self._linux_listener = pynput_keyboard.Listener(
+                on_press=self._on_linux_press,
+                on_release=self._on_linux_release,
+            )
+            self._linux_listener.start()
+            self._linux_listener.wait()
+        if any(self._linux_mouse_button(key) is not None for key in self._registered.values()):
+            self._linux_mouse_listener = pynput_mouse.Listener(on_click=self._on_linux_click)
+            self._linux_mouse_listener.start()
+            self._linux_mouse_listener.wait()
 
     def unregister(self, hotkey_id):
-        if hotkey_id in self._registered and sys.platform.startswith("win"):
+        if hotkey_id in self._registered and sys.platform.startswith("win") and hotkey_id not in self._poll_only:
             ctypes.windll.user32.UnregisterHotKey(None, hotkey_id)
         self._registered.pop(hotkey_id, None)
+        self._poll_only.discard(hotkey_id)
         if sys.platform.startswith("linux"):
             self._restart_linux_listener()
 
@@ -263,6 +339,76 @@ class NativeHotkeyManager:
         self._stop_linux_listener()
         if self._filter is not None:
             self._qt_app.removeNativeEventFilter(self._filter)
+
+
+class HotkeyCaptureEdit(QtWidgets.QLineEdit):
+    """A read-only field that records the next keyboard or mouse input."""
+
+    _MOUSE_BUTTONS = {
+        QtCore.Qt.MouseButton.LeftButton: "mouse_left",
+        QtCore.Qt.MouseButton.RightButton: "mouse_right",
+        QtCore.Qt.MouseButton.MiddleButton: "mouse_middle",
+        QtCore.Qt.MouseButton.BackButton: "mouse4",
+        QtCore.Qt.MouseButton.ForwardButton: "mouse5",
+    }
+
+    def __init__(self):
+        super().__init__()
+        self.setReadOnly(True)
+        self.setPlaceholderText("Click, then press a key or mouse button")
+        self.setToolTip("Click this field, then press the key, numpad key, or mouse button you want to use.")
+
+    def _capture(self, value):
+        self.setText(value)
+        self.selectAll()
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        modifiers = event.modifiers()
+        is_keypad = bool(modifiers & QtCore.Qt.KeyboardModifier.KeypadModifier)
+        value = None
+        if is_keypad:
+            digit_keys = {
+                QtCore.Qt.Key.Key_0: "numpad0", QtCore.Qt.Key.Key_1: "numpad1",
+                QtCore.Qt.Key.Key_2: "numpad2", QtCore.Qt.Key.Key_3: "numpad3",
+                QtCore.Qt.Key.Key_4: "numpad4", QtCore.Qt.Key.Key_5: "numpad5",
+                QtCore.Qt.Key.Key_6: "numpad6", QtCore.Qt.Key.Key_7: "numpad7",
+                QtCore.Qt.Key.Key_8: "numpad8", QtCore.Qt.Key.Key_9: "numpad9",
+                QtCore.Qt.Key.Key_Period: "numpad_decimal",
+                QtCore.Qt.Key.Key_Plus: "numpad_add",
+                QtCore.Qt.Key.Key_Minus: "numpad_subtract",
+                QtCore.Qt.Key.Key_Asterisk: "numpad_multiply",
+                QtCore.Qt.Key.Key_Slash: "numpad_divide",
+            }
+            value = digit_keys.get(key)
+        if value is None:
+            named_keys = {
+                QtCore.Qt.Key.Key_Return: "enter",
+                QtCore.Qt.Key.Key_Enter: "enter",
+                QtCore.Qt.Key.Key_Space: "space",
+                QtCore.Qt.Key.Key_Tab: "tab",
+            }
+            value = named_keys.get(key)
+        if value is None and QtCore.Qt.Key.Key_F1 <= key <= QtCore.Qt.Key.Key_F24:
+            value = f"f{int(key - QtCore.Qt.Key.Key_F1) + 1}"
+        if value is None:
+            text = event.text().strip().lower()
+            if len(text) == 1 and text.isalnum():
+                value = text
+        if value:
+            self._capture(value)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def mousePressEvent(self, event):
+        # The click used to focus the field should not itself become the bind.
+        was_focused = self.hasFocus()
+        super().mousePressEvent(event)
+        value = self._MOUSE_BUTTONS.get(event.button()) if was_focused else None
+        if value:
+            self._capture(value)
+            event.accept()
 
 
 def configure_diagnostics():
@@ -1177,15 +1323,12 @@ class SettingsWindow(QtWidgets.QWidget):
 
         self.times_input_1 = QtWidgets.QLineEdit()
         self.times_input_1.setPlaceholderText("Capper 1 times (e.g., 35,25,20)")
-        self.hotkey_input_1 = QtWidgets.QLineEdit()
-        self.hotkey_input_1.setPlaceholderText("Capper 1 hotkey (e.g., v)")
+        self.hotkey_input_1 = HotkeyCaptureEdit()
 
         self.times_input_2 = QtWidgets.QLineEdit()
         self.times_input_2.setPlaceholderText("Capper 2 times (e.g., 35,25,20)")
-        self.hotkey_input_2 = QtWidgets.QLineEdit()
-        self.hotkey_input_2.setPlaceholderText("Capper 2 hotkey (e.g., b)")
-        self.chat_hotkey_input = QtWidgets.QLineEdit()
-        self.chat_hotkey_input.setPlaceholderText("Chat hotkey (e.g., Enter)")
+        self.hotkey_input_2 = HotkeyCaptureEdit()
+        self.chat_hotkey_input = HotkeyCaptureEdit()
 
         timer_form.addRow("Capper 1 times", self.times_input_1)
         timer_form.addRow("Capper 1 hotkey", self.hotkey_input_1)

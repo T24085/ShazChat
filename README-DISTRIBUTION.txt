@@ -35,6 +35,8 @@ CHAT
 - Starting a timer never brings ShazChat to the foreground or takes focus
   away from the game.
 - Timer hotkeys work while movement or other gameplay keys are held down.
+- In Settings > Timers, click a hotkey field and press the key you want. Letter,
+  number, numpad, F1–F24, and mouse-button bindings are supported.
 - Press Enter to open the in-game chat input. Change that key in Settings > Timers
   if you prefer another key; Send or Escape returns focus to the game.
 - The transparent chat overlay automatically expands for wrapped messages, so

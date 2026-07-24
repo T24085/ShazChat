@@ -23,6 +23,10 @@ games launched through **XWayland**. A pure Wayland desktop may block global key
 listeners by design. When that happens, ShazChat shows a clear status message;
 switch to an X11/XWayland session or use the timer buttons in the app.
 
+Click a hotkey field in **Settings > Timers**, then press the keyboard key,
+numpad key, or mouse button you want to bind. Linux mouse-button hotkeys use
+the same `pynput` listener as keyboard hotkeys.
+
 The Windows click-through treatment is Windows-specific. Linux desktop
 compositors still show the timer and chat overlays, but their precise focus and
 click-through behavior can vary by desktop environment.
