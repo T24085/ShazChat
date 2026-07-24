@@ -447,6 +447,7 @@ class WebSocketClient:
         delay = 1
         while self.should_run:
             try:
+                self.app.dispatch_ui(lambda: self.app.set_connection_state("connecting"))
                 self.websocket = await websockets.connect(
                     self.server_url,
                     ping_interval=20,
@@ -456,6 +457,7 @@ class WebSocketClient:
                 self.running = True
                 delay = 1
                 self.app.logger.info("WebSocket connected: %s", self.server_url)
+                self.app.dispatch_ui(lambda: self.app.set_connection_state("connected"))
                 self.app.dispatch_ui(lambda: self.app.update_status("WebSocket: connected"))
                 self.app.dispatch_ui(self.app.on_ws_connected)
                 await self._listen()
@@ -465,6 +467,7 @@ class WebSocketClient:
                 self.running = False
                 self.websocket = None
             if self.should_run:
+                self.app.dispatch_ui(lambda: self.app.set_connection_state("reconnecting"))
                 self.app.dispatch_ui(lambda: self.app.update_status(f"WebSocket: reconnecting in {delay}s"))
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 15)
@@ -666,6 +669,7 @@ class WebSocketClient:
         """Close connection"""
         self.should_run = False
         self.running = False
+        self.app.dispatch_ui(lambda: self.app.set_connection_state("offline"))
         if self.websocket and self.loop:
             asyncio.run_coroutine_threadsafe(self.websocket.close(), self.loop)
 
@@ -1281,6 +1285,73 @@ class ChatOverlayWindow(QtWidgets.QWidget):
             document.drawContents(painter)
             painter.restore()
             top += card_height + self.CARD_GAP
+        painter.end()
+
+
+class ConnectionBadgeWindow(QtWidgets.QWidget):
+    """Small click-through gameplay indicator for sync availability."""
+
+    STATES = {
+        "connected": ("CONNECTED", "#42D2B1"),
+        "connecting": ("CONNECTING", "#61A8FF"),
+        "reconnecting": ("RECONNECTING", "#F5A524"),
+        "offline": ("OFFLINE", "#EF5B67"),
+    }
+
+    def __init__(self):
+        super().__init__()
+        self._state = "offline"
+        self.setWindowTitle("ShazChat Connection")
+        self.setWindowFlags(
+            QtCore.Qt.WindowType.FramelessWindowHint
+            | QtCore.Qt.WindowType.WindowStaysOnTopHint
+            | QtCore.Qt.WindowType.Tool
+        )
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFixedSize(138, 25)
+        self._positioned = False
+        QtCore.QTimer.singleShot(250, self._make_click_through)
+
+    def _make_click_through(self):
+        if not (sys.platform.startswith("win") and win32gui and win32con):
+            return
+        try:
+            hwnd = int(self.winId())
+            if hwnd:
+                style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+                win32gui.SetWindowLong(
+                    hwnd,
+                    win32con.GWL_EXSTYLE,
+                    style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT | win32con.WS_EX_NOACTIVATE,
+                )
+        except Exception:
+            pass
+
+    def set_state(self, state):
+        self._state = state if state in self.STATES else "offline"
+        self.update()
+
+    def set_position(self, timer_x, timer_y, timer_width, timer_height):
+        self.move(int(timer_x + (timer_width - self.width()) / 2), int(timer_y + timer_height + 5))
+        self._positioned = True
+
+    def paintEvent(self, event):
+        text, color = self.STATES[self._state]
+        accent = QtGui.QColor(color)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QtGui.QColor(14, 20, 28, 185))
+        painter.setPen(QtGui.QPen(QtGui.QColor(accent.red(), accent.green(), accent.blue(), 220), 1))
+        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 8, 8)
+        painter.setBrush(accent)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.drawEllipse(10, 9, 7, 7)
+        painter.setFont(QtGui.QFont("Segoe UI", 9, QtGui.QFont.Weight.Bold))
+        painter.setPen(QtGui.QColor("#F7FAFC"))
+        painter.drawText(self.rect().adjusted(25, 0, -6, 0), QtCore.Qt.AlignmentFlag.AlignVCenter, text)
         painter.end()
 
 
@@ -2339,6 +2410,8 @@ class CapTimerApp:
         self.settings = SettingsWindow(self)
         self.chat = ChatWindow(self)
         self.chat_overlay = ChatOverlayWindow()
+        self.connection_badge = ConnectionBadgeWindow()
+        self.connection_state = "offline"
         self.cycle_index = [-1, -1]
         self.lock = threading.Lock()
         self.compatibility_mode_enabled = False
@@ -2381,6 +2454,7 @@ class CapTimerApp:
         self.ws_client = None
         self.ws_loop = None
         if server_url and websockets:
+            self.set_connection_state("connecting")
             self.update_status("WebSocket: connecting...")
             print(f"Connecting to WebSocket server: {server_url}")
             self.ws_loop = asyncio.new_event_loop()
@@ -2394,6 +2468,7 @@ class CapTimerApp:
         elif server_url:
             print("WARNING: websockets library not available. Install with: pip install websockets")
             self.update_status("WebSocket: missing dependency")
+            self.set_connection_state("offline")
             QtWidgets.QMessageBox.warning(
                 None,
                 "Missing Dependency",
@@ -2402,6 +2477,7 @@ class CapTimerApp:
 
         if not server_url:
             self.update_status("Local-only mode: shared team timers require the server")
+            self.set_connection_state("offline")
 
         self.app.aboutToQuit.connect(self.shutdown)
         self._refresh_hotkeys()
@@ -2671,6 +2747,7 @@ class CapTimerApp:
         if enabled:
             self.window.hide()
             self.chat_overlay.hide()
+            self.connection_badge.hide()
             self.update_status("Compatibility mode: gameplay overlays and global hotkeys are disabled")
         else:
             self._set_gameplay_overlays_visible(not self.gameplay_overlays_hidden)
@@ -2680,13 +2757,16 @@ class CapTimerApp:
         if self.compatibility_mode_enabled:
             self.window.hide()
             self.chat_overlay.hide()
+            self.connection_badge.hide()
             return
         if visible:
             self.position_window()
             self.chat_overlay.show()
+            self.connection_badge.show()
         else:
             self.window.hide()
             self.chat_overlay.hide()
+            self.connection_badge.hide()
 
     def toggle_gameplay_overlays(self):
         if self.compatibility_mode_enabled:
@@ -2703,6 +2783,7 @@ class CapTimerApp:
 
     def shutdown(self):
         self.logger.info("ShazChat shutting down")
+        self.set_connection_state("offline")
         self._hotkey_poll_timer.stop()
         self.hotkey_manager.close()
         if self.ws_client:
@@ -2805,6 +2886,13 @@ class CapTimerApp:
 
     def update_status(self, text: str):
         self.settings.set_status(text)
+
+    def set_connection_state(self, state: str):
+        """Render the sync state without relying on the settings window being open."""
+        self.connection_state = state if state in ConnectionBadgeWindow.STATES else "offline"
+        self.connection_badge.set_state(self.connection_state)
+        if self.connection_badge._positioned and not self.compatibility_mode_enabled and not self.gameplay_overlays_hidden:
+            self.connection_badge.show()
 
     def on_ws_connected(self):
         if self.authenticated:
@@ -3247,6 +3335,7 @@ class CapTimerApp:
 
         # Set the final monitor geometry before the first show/click-through.
         self.window.place_on_screen(x, y, w, h)
+        self.connection_badge.set_position(x, y, w, h)
 
         print(f"Window positioned at ({x}, {y}) with size {w}x{h}")
         print(f"Screen size: {screen.width()}x{screen.height()}")
@@ -3258,8 +3347,10 @@ class CapTimerApp:
             self.window.label.show()
             self.window.label.setVisible(True)
             self.window.label.resize(TIMER_WIDTH, WINDOW_HEIGHT)
+            self.connection_badge.show()
         else:
             self.window.hide()
+            self.connection_badge.hide()
         chat_w = self.chat.width()
         chat_h = self.chat.height()
         self.chat.setGeometry(screen.x() + 18, screen.y() + screen.height() - chat_h - 18, chat_w, chat_h)
