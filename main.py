@@ -65,7 +65,7 @@ except Exception:
 HOTKEY_1 = "v"             # key to press for capper 1
 HOTKEY_2 = "b"             # key to press for capper 2
 CHAT_HOTKEY = "enter"      # key to open the chat composer during gameplay
-OVERLAY_TOGGLE_HOTKEY = "f10"  # show/hide timer and click-through chat overlays
+OVERLAY_TOGGLE_HOTKEY = "f10"  # pause/resume gameplay overlays and global bindings
 TIMER_OPTIONS_1 = [35, 25, 20]  # cycle order as requested
 TIMER_OPTIONS_2 = [35, 25, 20]
 CAP_COLORS = ["#00FF00", "#7A3DF0"]
@@ -1337,7 +1337,7 @@ class SettingsWindow(QtWidgets.QWidget):
         timer_form.addRow("Capper 2 times", self.times_input_2)
         timer_form.addRow("Capper 2 hotkey", self.hotkey_input_2)
         timer_form.addRow("Open chat hotkey", self.chat_hotkey_input)
-        timer_form.addRow("Toggle overlays hotkey", self.overlay_hotkey_input)
+        timer_form.addRow("Toggle gameplay controls hotkey", self.overlay_hotkey_input)
 
         self.monitor_select = QtWidgets.QComboBox()
         self._refresh_monitors()
@@ -2356,6 +2356,7 @@ class CapTimerApp:
         )
         self._hotkey_down = {1: False, 2: False, 3: False, 4: False}
         self._last_hotkey_fire = 0.0
+        self._last_toggle_hotkey = 0.0
         self._game_window_handle = 0
         self._hotkey_poll_timer = QtCore.QTimer(self.app)
         self._hotkey_poll_timer.setInterval(12)
@@ -2523,7 +2524,7 @@ class CapTimerApp:
         elif hotkey_id == 3:
             self.open_chat_composer()
         elif hotkey_id == 4:
-            self.toggle_gameplay_overlays()
+            self._toggle_gameplay_overlays_from_hotkey()
 
     def _fire_hotkey(self, hotkey_id):
         """Trigger once when either Windows hotkey path observes the key press."""
@@ -2533,6 +2534,14 @@ class CapTimerApp:
             return
         self._last_hotkey_fire = now
         self.trigger_timer(hotkey_id - 1)
+
+    def _toggle_gameplay_overlays_from_hotkey(self):
+        """Ignore duplicate events from the native listener and polling fallback."""
+        now = time.monotonic()
+        if now - self._last_toggle_hotkey < 0.3:
+            return
+        self._last_toggle_hotkey = now
+        self.toggle_gameplay_overlays()
 
     def _key_is_held(self, virtual_key):
         if not sys.platform.startswith("win"):
@@ -2547,14 +2556,14 @@ class CapTimerApp:
         if self.compatibility_mode_enabled or self._text_entry_focused:
             self._hotkey_down = {1: False, 2: False, 3: False, 4: False}
             return
-        for hotkey_id, key in ((1, HOTKEY_1), (2, HOTKEY_2), (3, CHAT_HOTKEY), (4, OVERLAY_TOGGLE_HOTKEY)):
+        for hotkey_id, key in self._active_hotkey_bindings():
             virtual_key = NativeHotkeyManager._virtual_key(key)
             down = bool(virtual_key is not None and self._key_is_held(virtual_key))
             if down and not self._hotkey_down.get(hotkey_id, False):
                 if hotkey_id == 3:
                     self.open_chat_composer()
                 elif hotkey_id == 4:
-                    self.toggle_gameplay_overlays()
+                    self._toggle_gameplay_overlays_from_hotkey()
                 else:
                     self._fire_hotkey(hotkey_id)
             self._hotkey_down[hotkey_id] = down
@@ -2600,7 +2609,7 @@ class CapTimerApp:
         if sys.platform.startswith("win"):
             self._hotkey_poll_timer.start()
         failures = []
-        for hotkey_id, key in ((1, HOTKEY_1), (2, HOTKEY_2), (3, CHAT_HOTKEY), (4, OVERLAY_TOGGLE_HOTKEY)):
+        for hotkey_id, key in self._active_hotkey_bindings():
             ok, reason = self.hotkey_manager.register(hotkey_id, key)
             if not ok:
                 failures.append(reason)
@@ -2610,7 +2619,18 @@ class CapTimerApp:
             self.update_status(message)
         else:
             backend = "Windows registered" if sys.platform.startswith("win") else "Linux listener"
-            self.logger.info("%s hotkeys enabled: %s, %s, %s, %s", backend, HOTKEY_1, HOTKEY_2, CHAT_HOTKEY, OVERLAY_TOGGLE_HOTKEY)
+            self.logger.info("%s hotkeys enabled: %s", backend, ", ".join(key for _, key in self._active_hotkey_bindings()))
+
+    def _active_hotkey_bindings(self):
+        """Keep only the toggle binding while gameplay controls are paused."""
+        if self.gameplay_overlays_hidden:
+            return ((4, OVERLAY_TOGGLE_HOTKEY),)
+        return (
+            (1, HOTKEY_1),
+            (2, HOTKEY_2),
+            (3, CHAT_HOTKEY),
+            (4, OVERLAY_TOGGLE_HOTKEY),
+        )
 
     def open_chat_composer(self):
         """Focus chat only when the player explicitly uses the chat hotkey."""
@@ -2654,7 +2674,7 @@ class CapTimerApp:
             self.update_status("Compatibility mode: gameplay overlays and global hotkeys are disabled")
         else:
             self._set_gameplay_overlays_visible(not self.gameplay_overlays_hidden)
-            self.update_status("Compatibility mode off: registered hotkeys and overlays restored")
+            self.update_status("Compatibility mode off: gameplay controls restored" if not self.gameplay_overlays_hidden else "Compatibility mode off: controls remain paused")
 
     def _set_gameplay_overlays_visible(self, visible):
         if self.compatibility_mode_enabled:
@@ -2674,7 +2694,12 @@ class CapTimerApp:
             return
         self.gameplay_overlays_hidden = not self.gameplay_overlays_hidden
         self._set_gameplay_overlays_visible(not self.gameplay_overlays_hidden)
-        self.update_status("Gameplay overlays hidden" if self.gameplay_overlays_hidden else "Gameplay overlays shown")
+        self._refresh_hotkeys()
+        self.update_status(
+            "Gameplay controls paused — press the toggle hotkey again to restore"
+            if self.gameplay_overlays_hidden
+            else "Gameplay overlays and hotkeys restored"
+        )
 
     def shutdown(self):
         self.logger.info("ShazChat shutting down")
@@ -3253,7 +3278,7 @@ def parse_args():
     p.add_argument("--hotkey1", default=HOTKEY_1, help="Capper 1 hotkey (default: v)")
     p.add_argument("--hotkey2", default=HOTKEY_2, help="Capper 2 hotkey (default: b)")
     p.add_argument("--chat-hotkey", default=CHAT_HOTKEY, help="Open chat hotkey (default: enter)")
-    p.add_argument("--overlay-hotkey", default=OVERLAY_TOGGLE_HOTKEY, help="Toggle gameplay overlays (default: f10)")
+    p.add_argument("--overlay-hotkey", default=OVERLAY_TOGGLE_HOTKEY, help="Pause/resume gameplay controls (default: f10)")
     p.add_argument("--monitor", type=int, default=1, help="Monitor number (1 = primary)")
     return p.parse_args()
 

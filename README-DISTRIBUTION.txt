@@ -37,8 +37,10 @@ CHAT
 - Timer hotkeys work while movement or other gameplay keys are held down.
 - In Settings > Timers, click a hotkey field and press the key you want. Letter,
   number, numpad, F1–F24, and mouse-button bindings are supported.
-- The Toggle overlays hotkey (F10 by default) hides or shows the timer and
-  transparent chat overlays without stopping gameplay timers or team chat.
+- The Toggle gameplay controls hotkey (F10 by default) hides/shows the timer and
+  transparent chat overlays. While hidden, capper and chat hotkeys are off so
+  you can type normally in Discord or another app; press the toggle key again
+  to restore them.
 - Press Enter to open the in-game chat input. Change that key in Settings > Timers
   if you prefer another key; Send or Escape returns focus to the game.
 - The transparent chat overlay automatically expands for wrapped messages, so
