@@ -59,9 +59,9 @@ CONNECTION
 The app connects to wss://capper.novatec.casa automatically. Internet access is
 required for team synchronization. If the app cannot reach the server, it still
 runs as a local timer.
-- A small click-through badge below the timer overlay shows CONNECTED,
-  RECONNECTING, or OFFLINE, so players immediately know whether team timers and
-  chat are syncing. It hides with the gameplay overlays.
+- Settings shows a compact Team sync status: Connected, Connecting,
+  Reconnecting, or Offline. The gameplay overlay stays focused on timers and
+  chat only.
 
 ACCOUNT HELP
 - Your password is stored on the ShazChat server only as a salted hash; the

@@ -36,6 +36,7 @@ Thumbs.db
 
 # Local testing
 *.log
+preview-*.txt
 
 # Never commit the Capper Times release signing key.
 release-signing-key.pem
