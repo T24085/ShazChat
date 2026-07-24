@@ -503,9 +503,13 @@ class WebSocketClient:
                             continue
                         sec = float(data["seconds"])
                         print(f"Received timer start from remote (capper {capper}): {sec}s")
-                        # Update timer in Qt thread using signal (thread-safe)
-                        # Capture sec in lambda to avoid closure issues
-                        self.app.window.start_timer_signal.emit(index, float(sec))
+                        # Update timer in the UI thread. Keep its state current
+                        # even while gameplay overlays are paused, but never
+                        # make a paused overlay reappear because another player
+                        # started a timer.
+                        self.app.dispatch_ui(
+                            lambda index=index, sec=sec: self.app.handle_remote_timer_start(index, sec)
+                        )
                     elif cmd == "role_status":
                         roles = data.get("roles", {})
                         if isinstance(roles, dict):
@@ -881,7 +885,7 @@ class OverlayWindow(QtWidgets.QMainWindow):
         except Exception as e:
             print(f"Warning: Could not enable click-through: {e}")
 
-    def start_timer(self, index: int, seconds: float):
+    def start_timer(self, index: int, seconds: float, reveal: bool = True):
         if not 0 <= index < len(self._remaining):
             return
         print(f"start_timer({index}) called with {seconds} seconds")
@@ -891,18 +895,12 @@ class OverlayWindow(QtWidgets.QMainWindow):
 
         self._remaining[index] = float(seconds)
         # Never activate the overlay: starting a timer must leave focus in the game.
-        if not self.isVisible():
+        if reveal and not self.isVisible():
             self.show()
             self.enable_click_through_after_show()
-        self.raise_()
-        # Clear "READY" text immediately and force update
-        self.label.set_text(index, self._display_text(index, ""))
-        QtWidgets.QApplication.processEvents()  # Force clear to happen
-        print(f"Cleared READY, updating label with remaining={self._remaining[index]}")
-        # Update label with timer value
+        # Render the countdown directly. An empty timer value is displayed as
+        # READY by OverlayLabel, which caused a READY flash on every hotkey.
         self._update_label(index)
-        QtWidgets.QApplication.processEvents()  # Force timer display
-        print(f"Starting timer, label texts={self.label.texts()}")
         if not self._qtimer.isActive():
             self._qtimer.start()
         print(f"Timer started successfully with {self._remaining[index]}s remaining")
@@ -1232,7 +1230,7 @@ class ChatOverlayWindow(QtWidgets.QWidget):
         if self._screen is not None:
             self.set_position(self._screen, self._chat_height)
 
-    def add_message(self, scope, message):
+    def add_message(self, scope, message, reveal: bool = True):
         name = str(message.get("name") or "Player").strip()[:32]
         text = str(message.get("text") or "").strip()[:220]
         if not text:
@@ -1241,8 +1239,9 @@ class ChatOverlayWindow(QtWidgets.QWidget):
         self._messages = self._messages[-self.MAX_MESSAGES:]
         self._resize_for_messages()
         self._alert_active = True
-        self.show()
-        self.raise_()
+        if reveal:
+            self.show()
+            self.raise_()
         self._fade_timer.start(8000)
         self.update()
 
@@ -2708,8 +2707,17 @@ class CapTimerApp:
             self.chat_overlay.hide()
             return
         if visible:
-            self.position_window()
-            self.chat_overlay.show()
+            # Do not call position_window() here. That routine intentionally
+            # places the main chat panel in its default lower-left location,
+            # which should only happen on startup or an explicit monitor
+            # change—not whenever a player toggles gameplay controls.
+            if not self.window._positioned:
+                self.position_window()
+            else:
+                self.window.show()
+                self.window.enable_click_through_after_show()
+                if self.chat_overlay._messages:
+                    self.chat_overlay.show()
         else:
             self.window.hide()
             self.chat_overlay.hide()
@@ -3094,8 +3102,16 @@ class CapTimerApp:
 
     def handle_chat_message(self, scope, message):
         self.chat.add_message(scope, message)
-        if not self.compatibility_mode_enabled and not self.gameplay_overlays_hidden:
-            self.chat_overlay.add_message(scope, message)
+        # Always retain the latest messages for the gameplay overlay. While
+        # controls are paused, do not reveal it; restoring overlays will show
+        # the queued recent messages without losing anything that arrived.
+        reveal = not self.compatibility_mode_enabled and not self.gameplay_overlays_hidden
+        self.chat_overlay.add_message(scope, message, reveal=reveal)
+
+    def handle_remote_timer_start(self, index, seconds):
+        """Sync remote timers without overriding a player's overlay toggle."""
+        reveal = not self.compatibility_mode_enabled and not self.gameplay_overlays_hidden
+        self.window.start_timer(index, float(seconds), reveal=reveal)
 
     def handle_team_directory(self, teams):
         self.settings.update_team_activity(teams)
