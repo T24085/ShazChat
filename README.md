@@ -26,6 +26,9 @@ endorsed by Hi-Rez Studios or Prophecy Games.
    pip install -r requirements-client.txt
    ```
 
+Linux players should see [README-LINUX.md](README-LINUX.md) for the source
+launcher and X11/XWayland global-hotkey requirements.
+
 ### Server Installation (for local testing)
 
 The server only needs `websockets`:

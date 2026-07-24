@@ -5,7 +5,7 @@ Only the matching private key, stored outside this repository, can publish an
 update that clients will accept.
 """
 
-APP_VERSION = "1.11.5"
+APP_VERSION = "1.11.6"
 UPDATE_MANIFEST_URL = "https://downloads.novatec.casa/capper-times/stable.json"
 UPDATE_DOWNLOAD_HOST = "downloads.novatec.casa"
 

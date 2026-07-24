@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # main.py
 # ShazChat: team-scoped overlay countdown timer with WebSocket sync
-# Windows-oriented (PyQt6 + Windows registered hotkeys + pywin32 for click-through)
+# Cross-platform PyQt6 client (Windows registered hotkeys; Linux X11/XWayland hotkeys)
 #
 # Usage:
 #   python main.py        # runs with network sync enabled
@@ -41,6 +41,13 @@ try:
 except ImportError:
     websockets = None
     asyncio = None
+
+# Linux global hotkeys. pynput uses an X11/XWayland listener; Wayland-only
+# desktops intentionally restrict global keyboard capture.
+try:
+    from pynput import keyboard as pynput_keyboard
+except ImportError:
+    pynput_keyboard = None
 
 # For click-through window on Windows:
 try:
@@ -130,15 +137,20 @@ class NativeHotkeyFilter(QtCore.QAbstractNativeEventFilter):
 
 
 class NativeHotkeyManager:
-    """Small, non-injecting Windows hotkey adapter using RegisterHotKey."""
+    """Global hotkeys via Windows RegisterHotKey or a Linux X11 listener."""
 
     MOD_NOREPEAT = 0x4000
 
     def __init__(self, qt_app, callback):
         self._registered = {}
-        self._filter = NativeHotkeyFilter(callback)
+        self._callback = callback
         self._qt_app = qt_app
-        self._qt_app.installNativeEventFilter(self._filter)
+        self._filter = None
+        self._linux_listener = None
+        self._linux_down = set()
+        if sys.platform.startswith("win"):
+            self._filter = NativeHotkeyFilter(callback)
+            self._qt_app.installNativeEventFilter(self._filter)
 
     @staticmethod
     def _virtual_key(key):
@@ -161,25 +173,96 @@ class NativeHotkeyManager:
 
     def register(self, hotkey_id, key):
         self.unregister(hotkey_id)
-        virtual_key = self._virtual_key(key)
-        if virtual_key is None:
-            return False, "Use Enter, Space, Tab, a letter, number, or F1–F24 key."
-        if not sys.platform.startswith("win"):
-            return False, "Windows registered hotkeys are only available on Windows."
-        if not ctypes.windll.user32.RegisterHotKey(None, hotkey_id, self.MOD_NOREPEAT, virtual_key):
-            return False, f"'{key}' is already in use by Windows or another app."
-        self._registered[hotkey_id] = key
-        return True, None
+        if sys.platform.startswith("win"):
+            virtual_key = self._virtual_key(key)
+            if virtual_key is None:
+                return False, "Use Enter, Space, Tab, a letter, number, or F1–F24 key."
+            if not ctypes.windll.user32.RegisterHotKey(None, hotkey_id, self.MOD_NOREPEAT, virtual_key):
+                return False, f"'{key}' is already in use by Windows or another app."
+            self._registered[hotkey_id] = key
+            return True, None
+        if sys.platform.startswith("linux"):
+            if self._linux_key(key) is None:
+                return False, "Use Enter, Space, Tab, a letter, number, or F1–F24 key."
+            if pynput_keyboard is None:
+                return False, "Linux hotkeys need pynput. Run: python3 -m pip install pynput"
+            self._registered[hotkey_id] = key
+            try:
+                self._restart_linux_listener()
+            except Exception as exc:
+                self._registered.pop(hotkey_id, None)
+                return False, f"Linux global hotkeys need an X11 or XWayland session ({exc})."
+            return True, None
+        return False, "Global hotkeys are currently supported on Windows and Linux."
+
+    @staticmethod
+    def _linux_key(key):
+        normalized = str(key or "").strip().lower()
+        if len(normalized) == 1 and (normalized.isalnum() or normalized == " "):
+            return normalized
+        named_keys = {
+            "enter": "enter",
+            "return": "enter",
+            "space": "space",
+            "tab": "tab",
+        }
+        if normalized in named_keys:
+            return named_keys[normalized]
+        if normalized.startswith("f") and normalized[1:].isdigit() and 1 <= int(normalized[1:]) <= 24:
+            return normalized
+        return None
+
+    def _matches_linux_key(self, pressed, configured):
+        expected = self._linux_key(configured)
+        if expected is None:
+            return False
+        if isinstance(pressed, pynput_keyboard.KeyCode):
+            return pressed.char is not None and pressed.char.lower() == expected
+        return getattr(pressed, "name", "").lower() == expected
+
+    def _on_linux_press(self, pressed):
+        for hotkey_id, configured in tuple(self._registered.items()):
+            if self._matches_linux_key(pressed, configured) and hotkey_id not in self._linux_down:
+                self._linux_down.add(hotkey_id)
+                self._callback(hotkey_id)
+
+    def _on_linux_release(self, released):
+        for hotkey_id, configured in tuple(self._registered.items()):
+            if self._matches_linux_key(released, configured):
+                self._linux_down.discard(hotkey_id)
+
+    def _stop_linux_listener(self):
+        listener, self._linux_listener = self._linux_listener, None
+        self._linux_down.clear()
+        if listener is not None:
+            listener.stop()
+
+    def _restart_linux_listener(self):
+        self._stop_linux_listener()
+        if not self._registered:
+            return
+        self._linux_listener = pynput_keyboard.Listener(
+            on_press=self._on_linux_press,
+            on_release=self._on_linux_release,
+        )
+        self._linux_listener.start()
+        # Surface an unavailable display/session while registering, instead of
+        # silently leaving players with non-functional keys.
+        self._linux_listener.wait()
 
     def unregister(self, hotkey_id):
         if hotkey_id in self._registered and sys.platform.startswith("win"):
             ctypes.windll.user32.UnregisterHotKey(None, hotkey_id)
         self._registered.pop(hotkey_id, None)
+        if sys.platform.startswith("linux"):
+            self._restart_linux_listener()
 
     def close(self):
         for hotkey_id in list(self._registered):
             self.unregister(hotkey_id)
-        self._qt_app.removeNativeEventFilter(self._filter)
+        self._stop_linux_listener()
+        if self._filter is not None:
+            self._qt_app.removeNativeEventFilter(self._filter)
 
 
 def configure_diagnostics():
@@ -2099,7 +2182,14 @@ class CapTimerApp:
         self.lock = threading.Lock()
         self.compatibility_mode_enabled = False
         self._text_entry_focused = False
-        self.hotkey_manager = NativeHotkeyManager(self.app, self._on_registered_hotkey)
+        # Linux listener callbacks arrive on a non-Qt thread; route both
+        # platform backends through the dispatcher before touching the UI.
+        self.hotkey_manager = NativeHotkeyManager(
+            self.app,
+            lambda hotkey_id: self.dispatch_ui(
+                lambda hotkey_id=hotkey_id: self._on_registered_hotkey(hotkey_id)
+            ),
+        )
         self._hotkey_down = {1: False, 2: False, 3: False}
         self._last_hotkey_fire = 0.0
         self._game_window_handle = 0
@@ -2335,9 +2425,9 @@ class CapTimerApp:
             # RegisterHotKey consumes its key before QLineEdit can receive it.
             # Releasing the registrations while typing lets chat use every key.
             return
-        # Games sometimes suppress the registered-hotkey message when movement
-        # or mouse buttons are held. Poll physical key state as a non-injecting
-        # fallback, while RegisterHotKey remains the normal low-overhead path.
+        # Games sometimes suppress Windows registered-hotkey messages while
+        # movement or mouse buttons are held. Poll physical key state there as
+        # a non-injecting fallback. Linux uses its listener backend directly.
         if sys.platform.startswith("win"):
             self._hotkey_poll_timer.start()
         failures = []
@@ -2346,11 +2436,12 @@ class CapTimerApp:
             if not ok:
                 failures.append(reason)
         if failures:
-            message = "Registered hotkey unavailable; held-key fallback is active. " + " ".join(failures)
+            message = "Global hotkey unavailable. " + " ".join(failures)
             self.logger.warning(message)
             self.update_status(message)
         else:
-            self.logger.info("Windows registered hotkeys enabled: %s, %s, %s", HOTKEY_1, HOTKEY_2, CHAT_HOTKEY)
+            backend = "Windows registered" if sys.platform.startswith("win") else "Linux listener"
+            self.logger.info("%s hotkeys enabled: %s, %s, %s", backend, HOTKEY_1, HOTKEY_2, CHAT_HOTKEY)
 
     def open_chat_composer(self):
         """Focus chat only when the player explicitly uses the chat hotkey."""

@@ -72,3 +72,5 @@ TROUBLESHOOTING
 - If the overlay or V hotkey is blocked, run ShazChat.bat as Administrator.
 - If Windows Defender warns about the file, use the trusted release supplied by
   your team lead.
+- Linux players should clone the repository and run ShazChat.sh. Global hotkeys
+  work on X11/XWayland; pure Wayland desktops may block them by design.
