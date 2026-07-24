@@ -22,6 +22,7 @@ from account_store import (
     delete_account,
     recover_password,
 )
+from moderation_store import append_chat_log, ban_status, mute_status
 from moderation import contains_blocked_term, load_blocked_terms
 
 logging.basicConfig(level=logging.INFO)
@@ -336,6 +337,11 @@ async def _handle_auth(websocket, data):
         _record_failed_account(websocket)
         await websocket.send(json.dumps({"cmd": "auth_result", "ok": False, "reason": "invalid_credentials", "message": "Player name or password is incorrect."}))
         return
+    ban = ban_status(account["name"])
+    if ban:
+        await websocket.send(json.dumps({"cmd": "auth_result", "ok": False, "reason": "banned", "message": "This account has been banned from ShazChat."}))
+        logger.info("Rejected banned player sign-in: %s", account["name"])
+        return
     _clear_account_attempts(websocket)
     profile = client_profiles.setdefault(websocket, {})
     profile.update(
@@ -445,6 +451,10 @@ async def handle_client(websocket):
                     await _handle_password_recovery(websocket, data)
                 elif not profile.get("authenticated"):
                     await websocket.send(json.dumps({"cmd": "auth_required"}))
+                elif ban_status(profile.get("name", "")):
+                    await websocket.send(json.dumps({"cmd": "account_session_ended", "reason": "banned"}))
+                    await websocket.close(code=4003, reason="Account banned")
+                    break
                 elif cmd == "account_change_password":
                     await _handle_change_password(websocket, data)
                 elif cmd == "account_delete":
@@ -503,6 +513,10 @@ async def handle_client(websocket):
                     text = str(data.get("text") or "").strip()[:MAX_CHAT_LENGTH]
                     if not room or scope not in ("global", "team") or not text:
                         continue
+                    mute = mute_status(profile.get("name", ""))
+                    if mute:
+                        await websocket.send(json.dumps({"cmd": "chat_rejected", "reason": "muted"}))
+                        continue
                     if not _chat_allowed(websocket):
                         await websocket.send(json.dumps({"cmd": "chat_rejected", "reason": "rate_limited"}))
                         continue
@@ -511,6 +525,7 @@ async def handle_client(websocket):
                         await websocket.send(json.dumps({"cmd": "chat_rejected", "reason": "blocked_content"}))
                         continue
                     payload = _chat_payload(scope, websocket, text, room if scope == "team" else None)
+                    append_chat_log(payload)
                     if scope == "global":
                         global_chat_history.append(payload)
                         await _broadcast_global(payload)

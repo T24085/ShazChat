@@ -174,3 +174,15 @@ def delete_account(username: str, password: str) -> dict[str, str]:
     del payload["accounts"][key]
     _save(payload)
     return deleted
+
+
+def list_accounts() -> list[dict[str, str | int]]:
+    """Return only non-sensitive account metadata for the server-owner console."""
+    accounts = _load()["accounts"]
+    return sorted(
+        (
+            {"id": f"account:{key}", "name": account.get("username", key), "created_at": account.get("created_at", 0)}
+            for key, account in accounts.items()
+        ),
+        key=lambda account: str(account["name"]).casefold(),
+    )

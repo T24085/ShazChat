@@ -28,6 +28,9 @@ CHAT
   My Team messages are visible only to the people in your selected team.
 - Severe slurs are blocked by the server before they can be sent, saved, or shown
   to other players. Normal gameplay banter is still allowed.
+- The server keeps an owner-only rolling log of the latest 50 chat messages for
+  moderation. Team chat still clears from the player-facing history when a team
+  becomes empty.
 - Press Enter or Send to post a message.
 - Timer hotkeys automatically pause while you type in chat or a settings field,
   then immediately return when you click back into the game. Your timer and chat
@@ -67,6 +70,13 @@ ACCOUNT HELP
 - While signed in, use Settings > Account to change your password or permanently
   delete your account. Both actions require your current password. Deleting an
   account also releases any team role you are holding.
+
+SERVER ADMINISTRATION
+- On the server-host computer, open ShazChat-Admin.bat for player controls.
+  You can list registered players, view the last 50 chat messages, mute/unmute,
+  ban/unban, and reset a player's password.
+- Bans and mutes are enforced by the server, survive restarts, and cannot be
+  bypassed by changing the ShazChat client. A mute may be temporary or permanent.
 
 UPDATES
 - ShazChat checks the official update file when it opens. It does not send

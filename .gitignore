@@ -44,6 +44,7 @@ server-data/
 # Release artifacts and generated PyInstaller output.
 release/
 release-*/
+build-*/
 dist/
 CapperTimer-Distribution/
 ShazChat-Distribution/
