@@ -12,9 +12,9 @@ chmod +x ShazChat.sh
 ./ShazChat.sh
 ```
 
-The launcher installs the Linux client dependencies, including `pynput` for
-global hotkeys, then starts the app. You can also install them manually with
-`python3 -m pip install -r requirements-client.txt` and run `python3 main.py`.
+The launcher creates a project-local `.venv`, installs the Linux client
+dependencies there (including `pynput` for global hotkeys), then starts the
+app. It does not modify your distro-managed Python installation.
 
 ## Hotkey support
 
