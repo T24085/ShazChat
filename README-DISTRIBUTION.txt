@@ -22,8 +22,8 @@ CHAT
   one-monitor setup; the lightweight click-through message overlay stays available.
 - Drag any edge or corner of the full chat panel to resize it. It starts compact
   but can be made larger for easier reading.
-- In Settings > Chat, choose your message font size and color plus your own name
-  color. Team chat labels stay green so team callouts remain instantly recognizable.
+- In Settings > Chat, choose your message font size and color. Player names stay
+  white and team chat labels stay green so callouts remain instantly recognizable.
 - Switch between Global and My Team. Global messages reach all connected players;
   My Team messages are visible only to the people in your selected team.
 - Severe slurs are blocked by the server before they can be sent, saved, or shown

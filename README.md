@@ -14,7 +14,7 @@ endorsed by Hi-Rez Studios or Prophecy Games.
 - **Local-only option**: Run without a server when you only need timers on one computer
 - **Always-on-top Overlay**: Transparent, click-through window that won't block gameplay
 - **Large Display**: Easy-to-read countdown timer
-- **Chat appearance controls**: Each player can set their chat font size, message color, and displayed name color; team chat labels remain green
+- **Chat appearance controls**: Each player can set their chat font size and message color; player names stay white and team chat labels remain green
 
 ## Installation
 
