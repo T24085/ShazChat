@@ -10,7 +10,7 @@ from unittest.mock import patch
 from cryptography.hazmat.primitives import serialization
 
 import update_service
-from update_service import UpdateError, UpdateRelease, canonical_manifest_bytes, download_verified_installer, is_newer, verify_manifest
+from update_service import UpdateError, UpdateRelease, canonical_manifest_bytes, download_verified_installer, fetch_update, is_newer, verify_manifest
 from updater_config import UPDATE_PUBLIC_KEY_B64
 
 
@@ -77,6 +77,14 @@ class UpdateServiceTests(unittest.TestCase):
             verify_manifest({"version": "1.1.1"})
         with self.assertRaises(UpdateError):
             update_service.version_key("latest")
+
+    def test_manifest_request_identifies_shazchat_without_player_metadata(self):
+        payload = json.dumps(self.signed_manifest()).encode("utf-8")
+        with patch.object(update_service, "urlopen", return_value=FakeResponse(payload)) as mocked_open:
+            fetch_update()
+        request = mocked_open.call_args.args[0]
+        self.assertEqual(request.get_header("User-agent"), "ShazChat Update Checker")
+        self.assertEqual(request.get_header("Accept"), "application/json")
 
     def test_verified_download_and_checksum_rejection(self):
         payload = b"verified-installer-content"

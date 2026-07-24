@@ -90,7 +90,15 @@ def verify_manifest(manifest: dict[str, Any]) -> UpdateRelease:
 
 def fetch_update(timeout: float = 6.0) -> UpdateRelease:
     # Intentionally no player, team, device, or installed-version metadata.
-    request = Request(UPDATE_MANIFEST_URL, headers={"Accept": "application/json"})
+    # Cloudflare R2 rejects Python's anonymous default user agent. This static
+    # product identifier contains no player, team, device, or version data.
+    request = Request(
+        UPDATE_MANIFEST_URL,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "ShazChat Update Checker",
+        },
+    )
     try:
         with urlopen(request, timeout=timeout) as response:
             payload = response.read(_MAX_MANIFEST_BYTES + 1)
