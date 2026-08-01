@@ -2661,18 +2661,30 @@ class CapTimerApp:
         if not available:
             self.logger.info("Update check complete: version %s is current", APP_VERSION)
             if manual:
-                QtWidgets.QMessageBox.information(
-                    self.settings,
-                    "ShazChat is current",
-                    f"You are already using the latest version ({APP_VERSION}).",
-                )
+                self._show_current_release(release)
             return
         self.update_release = release
         self.settings.set_update_status(f"Version {release.version} available")
         self.logger.info("Signed update available: %s", release.version)
-        if self._update_prompted_version != release.version:
+        if manual or self._update_prompted_version != release.version:
             self._update_prompted_version = release.version
             self._show_update_available(release)
+
+    def _show_current_release(self, release):
+        """A manual check may deliberately re-download the current installer."""
+        self.update_release = release
+        dialog = QtWidgets.QMessageBox(self.settings)
+        dialog.setIcon(QtWidgets.QMessageBox.Icon.Information)
+        dialog.setWindowTitle("ShazChat is current")
+        dialog.setText(f"You are already using ShazChat {APP_VERSION}.")
+        dialog.setInformativeText(
+            "If an install was interrupted or you need a clean repair, you can download and reinstall this verified release."
+        )
+        reinstall_button = dialog.addButton("Download and reinstall", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+        dialog.addButton("Close", QtWidgets.QMessageBox.ButtonRole.RejectRole)
+        dialog.exec()
+        if dialog.clickedButton() is reinstall_button:
+            self.install_available_update()
 
     def _show_update_available(self, release):
         dialog = QtWidgets.QMessageBox(self.settings)
