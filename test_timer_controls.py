@@ -1,6 +1,8 @@
 """Focused regression tests for ShazChat timer usability controls."""
 
+import tempfile
 import unittest
+from pathlib import Path
 
 import main
 
@@ -34,6 +36,14 @@ class TimerControlTests(unittest.TestCase):
         self.assertEqual(main.timer_anchor_position(screen, 520, 160, "top-center"), (2460, 145))
         self.assertEqual(main.timer_anchor_position(screen, 520, 160, "bottom-center"), (2460, 822))
         self.assertEqual(main.timer_anchor_position(screen, 520, 160, "bottom-right"), (2982, 822))
+
+    def test_update_launcher_keeps_installer_path_quoted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            installer = r"C:\Users\Player Name\AppData\Roaming\ShazChat\updates\ShazChat-Setup.exe"
+            launcher = Path(main.write_update_launcher(installer, directory))
+            text = launcher.read_text(encoding="utf-8")
+        self.assertIn('start "" /wait "C:\\Users\\Player Name\\AppData\\Roaming\\ShazChat\\updates\\ShazChat-Setup.exe"', text)
+        self.assertIn('del "%~f0"', text)
 
 
 if __name__ == "__main__":

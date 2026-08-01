@@ -144,6 +144,20 @@ def timer_anchor_position(screen, width, height, anchor, margin=18):
     return int(x), int(y)
 
 
+def write_update_launcher(installer, cache_dir):
+    """Create a quoted helper so Windows can replace the running app safely."""
+    os.makedirs(cache_dir, exist_ok=True)
+    launcher = os.path.join(cache_dir, "install-shazchat-update.cmd")
+    with open(launcher, "w", encoding="utf-8", newline="\r\n") as handle:
+        handle.write("@echo off\r\n")
+        handle.write("timeout /t 2 /nobreak >nul\r\n")
+        handle.write(
+            f'start "" /wait "{installer}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS\r\n'
+        )
+        handle.write('del "%~f0"\r\n')
+    return launcher
+
+
 class UiDispatcher(QtCore.QObject):
     """Safely deliver network callbacks to the Qt UI thread."""
 
@@ -2730,15 +2744,15 @@ class CapTimerApp:
             return
         self.logger.info("Verified update installer downloaded: %s", installer)
         self.update_status("Update verified. Restarting to install…")
-        # A tiny detached shell waits for this process to close before Inno Setup
-        # replaces the executable. Inno launches the new version after install.
-        command = (
-            "ping 127.0.0.1 -n 3 > nul & "
-            f'start "" "{installer}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS'
-        )
+        # A quoted .cmd helper avoids cmd.exe's fragile nested-quote behavior.
+        # It waits for this app to close, then starts the verified installer.
         try:
+            launcher = write_update_launcher(str(installer), UPDATE_CACHE_DIR)
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            subprocess.Popen(["cmd.exe", "/d", "/s", "/c", command], creationflags=flags)
+            subprocess.Popen(
+                ["cmd.exe", "/d", "/c", f'call "{launcher}"'],
+                creationflags=flags,
+            )
         except OSError as exc:
             self.logger.exception("Unable to launch verified installer")
             QtWidgets.QMessageBox.critical(self.settings, "Update could not start", str(exc))
