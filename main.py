@@ -1499,8 +1499,12 @@ class SettingsWindow(QtWidgets.QWidget):
         self.chat_text_color_btn = QtWidgets.QPushButton()
         self.chat_text_color_btn.clicked.connect(lambda: self._choose_chat_color("text"))
         self._update_chat_color_buttons()
+        self.show_chat_overlay = QtWidgets.QCheckBox("Show in-game chat overlay")
+        self.show_chat_overlay.setToolTip("Turn this off to keep the chat panel and messages out of your gameplay view. Timer cards stay on.")
+        self.show_chat_overlay.setChecked(True)
         chat_form.addRow("Chat font size", self.chat_font_size)
         chat_form.addRow("Message color", self.chat_text_color_btn)
+        chat_form.addRow("Gameplay chat", self.show_chat_overlay)
         chat_hint = QtWidgets.QLabel("Player names stay white. Team channel labels stay green so team callouts remain easy to spot.")
         chat_hint.setWordWrap(True)
         chat_form.addRow("", chat_hint)
@@ -1797,6 +1801,7 @@ class SettingsWindow(QtWidgets.QWidget):
             selector.currentIndexChanged.connect(self._queue_auto_apply)
         self.compatibility_mode.toggled.connect(self._queue_auto_apply)
         self.chat_font_size.valueChanged.connect(self._queue_auto_apply)
+        self.show_chat_overlay.toggled.connect(self._queue_auto_apply)
         self.cycle_window_input.valueChanged.connect(self._queue_auto_apply)
         self.scroll_adjust_enabled.toggled.connect(self._queue_auto_apply)
         for button in self.role_buttons.values():
@@ -1983,6 +1988,7 @@ class SettingsWindow(QtWidgets.QWidget):
         scroll_adjust_enabled,
         monitor_index,
         timer_anchor,
+        chat_overlay_enabled,
         room,
         map_name=None,
         role=None,
@@ -2009,6 +2015,8 @@ class SettingsWindow(QtWidgets.QWidget):
                 self.timer_anchor_select.setCurrentIndex(anchor_index)
             if map_name and map_name in MAP_PRESETS:
                 self.map_select.setCurrentText(map_name)
+            self.show_chat_overlay.setChecked(bool(chat_overlay_enabled))
+            self.app.chat_overlay_enabled = bool(chat_overlay_enabled)
             self.set_room(room)
             if role in self.role_buttons:
                 self.role_buttons[role].setChecked(True)
@@ -2087,6 +2095,7 @@ class SettingsWindow(QtWidgets.QWidget):
             self.compatibility_mode.isChecked(),
             self.chat_font_size.value(),
             self.chat_text_color,
+            self.show_chat_overlay.isChecked(),
         )
 
     def _load_presets(self):
@@ -2116,6 +2125,8 @@ class SettingsWindow(QtWidgets.QWidget):
         compatibility_mode = bool(presets.get("_compatibility_mode", False))
         self.chat_font_size.setValue(max(10, min(24, int(presets.get("_chat_font_size", 12)))))
         self.chat_text_color = str(presets.get("_chat_text_color") or "#F8FBFF")
+        self.show_chat_overlay.setChecked(bool(presets.get("_chat_overlay_enabled", True)))
+        self.app.chat_overlay_enabled = self.show_chat_overlay.isChecked()
         self._update_chat_color_buttons()
         blocker = QtCore.QSignalBlocker(self.compatibility_mode)
         self.compatibility_mode.setChecked(compatibility_mode)
@@ -2200,6 +2211,11 @@ class SettingsWindow(QtWidgets.QWidget):
         presets = self._load_presets()
         presets["_chat_font_size"] = int(font_size)
         presets["_chat_text_color"] = str(text_color)
+        self._save_presets(presets)
+
+    def _save_chat_overlay_enabled(self, enabled):
+        presets = self._load_presets()
+        presets["_chat_overlay_enabled"] = bool(enabled)
         self._save_presets(presets)
 
     def _on_load_preset(self):
@@ -2539,6 +2555,7 @@ class CapTimerApp:
         self.scroll_adjust_enabled = False
         self.lock = threading.Lock()
         self.compatibility_mode_enabled = False
+        self.chat_overlay_enabled = True
         # This is intentionally session-only: overlays start visible on launch
         # unless the player explicitly enables compatibility mode.
         self.gameplay_overlays_hidden = False
@@ -2899,6 +2916,24 @@ class CapTimerApp:
             self._set_gameplay_overlays_visible(not self.gameplay_overlays_hidden)
             self.update_status("Compatibility mode off: gameplay controls restored" if not self.gameplay_overlays_hidden else "Compatibility mode off: controls remain paused")
 
+    def set_chat_overlay_enabled(self, enabled):
+        """Hide/show only the gameplay chat overlay, never timer cards or hotkeys."""
+        self.chat_overlay_enabled = bool(enabled)
+        self.settings._save_chat_overlay_enabled(self.chat_overlay_enabled)
+        should_show = (
+            self.chat_overlay_enabled
+            and not self.compatibility_mode_enabled
+            and not self.gameplay_overlays_hidden
+            and bool(self.chat_overlay._messages)
+        )
+        if should_show:
+            self.chat_overlay.show()
+        else:
+            self.chat_overlay.hide()
+        self.update_status(
+            "Gameplay chat overlay on" if self.chat_overlay_enabled else "Gameplay chat overlay off — timer controls remain on"
+        )
+
     def _set_gameplay_overlays_visible(self, visible):
         if self.compatibility_mode_enabled:
             self.window.hide()
@@ -2914,7 +2949,7 @@ class CapTimerApp:
             else:
                 self.window.show()
                 self.window.enable_click_through_after_show()
-                if self.chat_overlay._messages:
+                if self.chat_overlay_enabled and self.chat_overlay._messages:
                     self.chat_overlay.show()
         else:
             self.window.hide()
@@ -2964,6 +2999,7 @@ class CapTimerApp:
         compatibility_mode: Optional[bool] = None,
         chat_font_size: Optional[int] = None,
         chat_text_color: Optional[str] = None,
+        chat_overlay_enabled: Optional[bool] = None,
     ):
         global HOTKEY_1, HOTKEY_2, CHAT_HOTKEY, OVERLAY_TOGGLE_HOTKEY, ADD_TIME_HOTKEY, SUBTRACT_TIME_HOTKEY, TIMER_OPTIONS_1, TIMER_OPTIONS_2
         with self.lock:
@@ -3050,6 +3086,8 @@ class CapTimerApp:
                 self.chat.set_appearance(self.chat_font_size, self.chat_text_color)
                 self.chat_overlay.set_appearance(self.chat_font_size, self.chat_text_color)
                 self.settings._save_chat_appearance(self.chat_font_size, self.chat_text_color)
+            if chat_overlay_enabled is not None:
+                self.set_chat_overlay_enabled(chat_overlay_enabled)
             if role:
                 if role in LOCKED_ROLES:
                     if self.role_owners.get(role) == self.player_id or self.role_owners.get(role) is None:
@@ -3326,7 +3364,11 @@ class CapTimerApp:
         # Always retain the latest messages for the gameplay overlay. While
         # controls are paused, do not reveal it; restoring overlays will show
         # the queued recent messages without losing anything that arrived.
-        reveal = not self.compatibility_mode_enabled and not self.gameplay_overlays_hidden
+        reveal = (
+            self.chat_overlay_enabled
+            and not self.compatibility_mode_enabled
+            and not self.gameplay_overlays_hidden
+        )
         self.chat_overlay.add_message(scope, message, reveal=reveal)
 
     def handle_remote_timer_start(self, index, seconds):
@@ -3509,6 +3551,7 @@ class CapTimerApp:
             self.scroll_adjust_enabled,
             self.monitor_index,
             self.timer_anchor,
+            self.chat_overlay_enabled,
             self.room,
             self.selected_map,
             self.role,
@@ -3517,7 +3560,11 @@ class CapTimerApp:
         )
         self.settings.show()
         self.chat.show()
-        if not self.compatibility_mode_enabled and not self.gameplay_overlays_hidden:
+        if (
+            self.chat_overlay_enabled
+            and not self.compatibility_mode_enabled
+            and not self.gameplay_overlays_hidden
+        ):
             self.chat_overlay.show()
 
     def run(self):

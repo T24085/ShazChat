@@ -17,6 +17,7 @@ endorsed by Hi-Rez Studios or Prophecy Games.
 - **Always-on-top Overlay**: Transparent, click-through window that won't block gameplay
 - **Large Display**: Easy-to-read countdown timer
 - **Chat appearance controls**: Each player can set their chat font size and message color; player names stay white and team chat labels remain green
+- **Optional gameplay chat overlay**: Hide or restore only the on-screen chat overlay whenever you need a clear screen; timer cards remain active.
 
 ## Installation
 
