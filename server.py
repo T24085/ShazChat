@@ -474,6 +474,19 @@ async def handle_client(websocket):
                         await websocket.send(json.dumps({"cmd": "timer_rejected"}))
                         continue
                     await _broadcast(room, {"cmd": "start", "seconds": seconds, "sender": client_profiles[websocket].get("id"), "capper": capper})
+                elif cmd == "adjust":
+                    room = client_room.get(websocket)
+                    try:
+                        capper = int(data.get("capper"))
+                        delta = float(data.get("delta"))
+                    except (TypeError, ValueError):
+                        capper, delta = 0, 0
+                    role = f"Capper {capper}"
+                    owner = role_claims.get(room, {}).get(role) if room else None
+                    if not room or capper not in (1, 2) or not math.isfinite(delta) or not -30 <= delta <= 30 or not delta or not owner or owner.get("ws") != websocket:
+                        await websocket.send(json.dumps({"cmd": "timer_rejected"}))
+                        continue
+                    await _broadcast(room, {"cmd": "adjust", "delta": delta, "sender": client_profiles[websocket].get("id"), "capper": capper})
                 elif cmd == "role_claim":
                     room = client_room.get(websocket)
                     role = data.get("role")

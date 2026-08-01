@@ -15,10 +15,11 @@ class _FakeKeyCode:
 
 
 class _FakeListener:
-    def __init__(self, on_press=None, on_release=None, on_click=None):
+    def __init__(self, on_press=None, on_release=None, on_click=None, on_scroll=None):
         self.on_press = on_press
         self.on_release = on_release
         self.on_click = on_click
+        self.on_scroll = on_scroll
         self.started = False
         self.stopped = False
 
@@ -81,6 +82,24 @@ class LinuxHotkeyTests(unittest.TestCase):
             main.sys.platform = original_platform
             main.pynput_keyboard = original_backend
             main.pynput_mouse = original_mouse_backend
+
+    def test_optional_scroll_callback_uses_signed_steps(self):
+        original_platform = main.sys.platform
+        original_backend = main.pynput_mouse
+        steps = []
+        try:
+            main.sys.platform = "linux"
+            main.pynput_mouse = _FakeMouse
+            manager = main.NativeHotkeyManager(object(), lambda _id: None, wheel_callback=steps.append)
+            manager.set_wheel_enabled(True)
+            listener = manager._linux_mouse_listener
+            listener.on_scroll(0, 0, 0, 2)
+            listener.on_scroll(0, 0, 0, -1)
+            self.assertEqual(steps, [1, -1])
+            manager.close()
+        finally:
+            main.sys.platform = original_platform
+            main.pynput_mouse = original_backend
 
 
 if __name__ == "__main__":

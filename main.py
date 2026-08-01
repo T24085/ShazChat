@@ -66,8 +66,20 @@ HOTKEY_1 = "v"             # key to press for capper 1
 HOTKEY_2 = "b"             # key to press for capper 2
 CHAT_HOTKEY = "enter"      # key to open the chat composer during gameplay
 OVERLAY_TOGGLE_HOTKEY = "f10"  # pause/resume gameplay overlays and global bindings
+ADD_TIME_HOTKEY = "numpad_add"
+SUBTRACT_TIME_HOTKEY = "numpad_subtract"
 TIMER_OPTIONS_1 = [35, 25, 20]  # cycle order as requested
 TIMER_OPTIONS_2 = [35, 25, 20]
+DEFAULT_PRESET_CYCLE_WINDOW = 1.5
+DEFAULT_TIMER_ANCHOR = "top-center"
+TIMER_ANCHORS = (
+    ("Top left", "top-left"),
+    ("Top center", "top-center"),
+    ("Top right", "top-right"),
+    ("Bottom left", "bottom-left"),
+    ("Bottom center", "bottom-center"),
+    ("Bottom right", "bottom-right"),
+)
 CAP_COLORS = ["#00FF00", "#7A3DF0"]
 DEFAULT_ROLE = "Capper 1"
 LOCKED_ROLES = ["Capper 1", "Capper 2"]
@@ -102,6 +114,34 @@ MAP_PRESETS = [
 ]
 
 MY_ID = str(uuid.uuid4())
+
+
+def choose_timer_preset(options, previous_index, last_press_at, now, cycle_window):
+    """Return the intended preset index, restarting after a normal pause."""
+    if not options:
+        return None
+    if now - last_press_at > max(0.1, float(cycle_window)):
+        return 0
+    return (int(previous_index) + 1) % len(options)
+
+
+def timer_anchor_position(screen, width, height, anchor, margin=18):
+    """Calculate a monitor-relative timer position without touching chat layout."""
+    try:
+        vertical, horizontal = str(anchor or DEFAULT_TIMER_ANCHOR).split("-", 1)
+    except ValueError:
+        vertical, horizontal = "top", "center"
+    if horizontal == "left":
+        x = screen.x() + margin
+    elif horizontal == "right":
+        x = screen.x() + screen.width() - width - margin
+    else:
+        x = screen.x() + (screen.width() - width) / 2
+    if vertical == "bottom":
+        y = screen.y() + screen.height() - height - margin
+    else:
+        y = screen.y() + screen.height() * 0.05
+    return int(x), int(y)
 
 
 class UiDispatcher(QtCore.QObject):
@@ -144,15 +184,17 @@ class NativeHotkeyManager:
 
     MOD_NOREPEAT = 0x4000
 
-    def __init__(self, qt_app, callback):
+    def __init__(self, qt_app, callback, wheel_callback=None):
         self._registered = {}
         self._callback = callback
+        self._wheel_callback = wheel_callback
         self._qt_app = qt_app
         self._filter = None
         self._linux_listener = None
         self._linux_mouse_listener = None
         self._linux_down = set()
         self._poll_only = set()
+        self._wheel_enabled = False
         if sys.platform.startswith("win"):
             self._filter = NativeHotkeyFilter(callback)
             self._qt_app.installNativeEventFilter(self._filter)
@@ -301,6 +343,10 @@ class NativeHotkeyManager:
             elif not pressed:
                 self._linux_down.discard(hotkey_id)
 
+    def _on_mouse_scroll(self, _x, _y, _dx, dy):
+        if self._wheel_callback is not None and dy:
+            self._wheel_callback(1 if dy > 0 else -1)
+
     def _stop_linux_listener(self):
         listener, self._linux_listener = self._linux_listener, None
         mouse_listener, self._linux_mouse_listener = self._linux_mouse_listener, None
@@ -310,9 +356,35 @@ class NativeHotkeyManager:
         if mouse_listener is not None:
             mouse_listener.stop()
 
+    def _restart_mouse_listener(self):
+        mouse_listener, self._linux_mouse_listener = self._linux_mouse_listener, None
+        if mouse_listener is not None:
+            mouse_listener.stop()
+        needs_mouse_listener = (
+            any(self._linux_mouse_button(key) is not None for key in self._registered.values())
+            or (self._wheel_enabled and self._wheel_callback is not None)
+        )
+        if needs_mouse_listener and pynput_mouse is not None:
+            self._linux_mouse_listener = pynput_mouse.Listener(
+                on_click=self._on_linux_click,
+                on_scroll=self._on_mouse_scroll,
+            )
+            self._linux_mouse_listener.start()
+            self._linux_mouse_listener.wait()
+
+    def set_wheel_enabled(self, enabled):
+        enabled = bool(enabled)
+        if self._wheel_enabled == enabled:
+            return
+        self._wheel_enabled = enabled
+        if sys.platform.startswith("linux"):
+            self._restart_linux_listener()
+        elif sys.platform.startswith("win"):
+            self._restart_mouse_listener()
+
     def _restart_linux_listener(self):
         self._stop_linux_listener()
-        if not self._registered:
+        if not self._registered and not (self._wheel_enabled and self._wheel_callback is not None):
             return
         if any(self._linux_key(key) is not None for key in self._registered.values()):
             self._linux_listener = pynput_keyboard.Listener(
@@ -321,10 +393,7 @@ class NativeHotkeyManager:
             )
             self._linux_listener.start()
             self._linux_listener.wait()
-        if any(self._linux_mouse_button(key) is not None for key in self._registered.values()):
-            self._linux_mouse_listener = pynput_mouse.Listener(on_click=self._on_linux_click)
-            self._linux_mouse_listener.start()
-            self._linux_mouse_listener.wait()
+        self._restart_mouse_listener()
 
     def unregister(self, hotkey_id):
         if hotkey_id in self._registered and sys.platform.startswith("win") and hotkey_id not in self._poll_only:
@@ -510,6 +579,19 @@ class WebSocketClient:
                         self.app.dispatch_ui(
                             lambda index=index, sec=sec: self.app.handle_remote_timer_start(index, sec)
                         )
+                    elif cmd == "adjust" and "delta" in data:
+                        if data.get("sender") == self.app.player_id:
+                            continue
+                        capper = int(data.get("capper", 1))
+                        index = capper - 1
+                        if index not in (0, 1):
+                            continue
+                        delta = float(data["delta"])
+                        if not -30 <= delta <= 30:
+                            continue
+                        self.app.dispatch_ui(
+                            lambda index=index, delta=delta: self.app.handle_remote_timer_adjust(index, delta)
+                        )
                     elif cmd == "role_status":
                         roles = data.get("roles", {})
                         if isinstance(roles, dict):
@@ -578,6 +660,15 @@ class WebSocketClient:
                 await self.websocket.send(msg)
             except Exception as e:
                 print(f"Failed to send: {e}")
+
+    async def send_timer_adjustment(self, delta, sender_id, capper):
+        if self.websocket and self.running:
+            try:
+                await self.websocket.send(json.dumps(
+                    {"cmd": "adjust", "delta": delta, "sender": sender_id, "capper": capper}
+                ))
+            except Exception as e:
+                print(f"Failed to send timer adjustment: {e}")
 
     async def send_auth(self, username, password, create=False, recovery_pin=""):
         if self.websocket and self.running:
@@ -744,6 +835,7 @@ class OverlayLabel(QtWidgets.QWidget):
 class OverlayWindow(QtWidgets.QMainWindow):
     # Signal to start timer from any thread
     start_timer_signal = QtCore.pyqtSignal(int, float)
+    adjust_timer_signal = QtCore.pyqtSignal(int, float)
 
     def __init__(self):
         super().__init__()
@@ -764,6 +856,7 @@ class OverlayWindow(QtWidgets.QMainWindow):
 
         # Connect signal to start method
         self.start_timer_signal.connect(self.start_timer)
+        self.adjust_timer_signal.connect(self.adjust_timer)
         container = QtWidgets.QWidget(self)
         layout = QtWidgets.QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -914,6 +1007,19 @@ class OverlayWindow(QtWidgets.QMainWindow):
         self._set_label_text(index, self._display_text(index, "READY"), color=CAP_COLORS[index])
         if all(rem <= 0 for rem in self._remaining):
             self._qtimer.stop()
+
+    def adjust_timer(self, index: int, delta: float, reveal: bool = True):
+        """Fine-tune a running countdown without stealing foreground focus."""
+        if not 0 <= index < len(self._remaining) or self._remaining[index] <= 0:
+            return
+        self._remaining[index] = max(0.0, self._remaining[index] + float(delta))
+        if self._remaining[index] <= 0:
+            self.stop(index)
+            return
+        if reveal and not self.isVisible():
+            self.show()
+            self.enable_click_through_after_show()
+        self._update_label(index)
 
     def _tick(self):
         any_active = False
@@ -1339,6 +1445,14 @@ class SettingsWindow(QtWidgets.QWidget):
         self.hotkey_input_2 = HotkeyCaptureEdit()
         self.chat_hotkey_input = HotkeyCaptureEdit()
         self.overlay_hotkey_input = HotkeyCaptureEdit()
+        self.add_time_hotkey_input = HotkeyCaptureEdit()
+        self.subtract_time_hotkey_input = HotkeyCaptureEdit()
+        self.cycle_window_input = QtWidgets.QDoubleSpinBox()
+        self.cycle_window_input.setRange(0.5, 3.0)
+        self.cycle_window_input.setSingleStep(0.1)
+        self.cycle_window_input.setDecimals(1)
+        self.cycle_window_input.setSuffix(" seconds")
+        self.scroll_adjust_enabled = QtWidgets.QCheckBox("Enable scroll wheel: up +1 second, down −1 second")
 
         timer_form.addRow("Capper 1 times", self.times_input_1)
         timer_form.addRow("Capper 1 hotkey", self.hotkey_input_1)
@@ -1346,10 +1460,18 @@ class SettingsWindow(QtWidgets.QWidget):
         timer_form.addRow("Capper 2 hotkey", self.hotkey_input_2)
         timer_form.addRow("Open chat hotkey", self.chat_hotkey_input)
         timer_form.addRow("Toggle gameplay controls hotkey", self.overlay_hotkey_input)
+        timer_form.addRow("Add 5 seconds hotkey", self.add_time_hotkey_input)
+        timer_form.addRow("Subtract 5 seconds hotkey", self.subtract_time_hotkey_input)
+        timer_form.addRow("Quick-repeat cycle window", self.cycle_window_input)
+        timer_form.addRow("Scroll timer adjustment", self.scroll_adjust_enabled)
 
         self.monitor_select = QtWidgets.QComboBox()
         self._refresh_monitors()
         player_form.addRow("Display monitor", self.monitor_select)
+        self.timer_anchor_select = QtWidgets.QComboBox()
+        for label, value in TIMER_ANCHORS:
+            self.timer_anchor_select.addItem(label, value)
+        player_form.addRow("Timer position", self.timer_anchor_select)
 
         self.map_select = QtWidgets.QComboBox()
         for name in MAP_PRESETS:
@@ -1399,7 +1521,12 @@ class SettingsWindow(QtWidgets.QWidget):
             self.hotkey_input_2,
             self.chat_hotkey_input,
             self.overlay_hotkey_input,
+            self.add_time_hotkey_input,
+            self.subtract_time_hotkey_input,
+            self.add_time_hotkey_input,
+            self.subtract_time_hotkey_input,
             self.monitor_select,
+            self.timer_anchor_select,
             self.map_select,
             self.room_select,
         ):
@@ -1666,10 +1793,12 @@ class SettingsWindow(QtWidgets.QWidget):
             self.overlay_hotkey_input,
         ):
             input_widget.textChanged.connect(self._queue_auto_apply)
-        for selector in (self.monitor_select, self.map_select, self.room_select):
+        for selector in (self.monitor_select, self.timer_anchor_select, self.map_select, self.room_select):
             selector.currentIndexChanged.connect(self._queue_auto_apply)
         self.compatibility_mode.toggled.connect(self._queue_auto_apply)
         self.chat_font_size.valueChanged.connect(self._queue_auto_apply)
+        self.cycle_window_input.valueChanged.connect(self._queue_auto_apply)
+        self.scroll_adjust_enabled.toggled.connect(self._queue_auto_apply)
         for button in self.role_buttons.values():
             button.toggled.connect(self._queue_auto_apply)
 
@@ -1848,7 +1977,12 @@ class SettingsWindow(QtWidgets.QWidget):
         hotkey_2,
         chat_hotkey,
         overlay_hotkey,
+        add_time_hotkey,
+        subtract_time_hotkey,
+        cycle_window,
+        scroll_adjust_enabled,
         monitor_index,
+        timer_anchor,
         room,
         map_name=None,
         role=None,
@@ -1864,8 +1998,15 @@ class SettingsWindow(QtWidgets.QWidget):
             self.hotkey_input_2.setText(hotkey_2)
             self.chat_hotkey_input.setText(chat_hotkey)
             self.overlay_hotkey_input.setText(overlay_hotkey)
+            self.add_time_hotkey_input.setText(add_time_hotkey)
+            self.subtract_time_hotkey_input.setText(subtract_time_hotkey)
+            self.cycle_window_input.setValue(float(cycle_window))
+            self.scroll_adjust_enabled.setChecked(bool(scroll_adjust_enabled))
             if 0 <= monitor_index < self.monitor_select.count():
                 self.monitor_select.setCurrentIndex(monitor_index)
+            anchor_index = self.timer_anchor_select.findData(timer_anchor)
+            if anchor_index >= 0:
+                self.timer_anchor_select.setCurrentIndex(anchor_index)
             if map_name and map_name in MAP_PRESETS:
                 self.map_select.setCurrentText(map_name)
             self.set_room(room)
@@ -1922,6 +2063,8 @@ class SettingsWindow(QtWidgets.QWidget):
         hotkey_text_2 = self.hotkey_input_2.text().strip().lower()
         chat_hotkey_text = self.chat_hotkey_input.text().strip().lower()
         overlay_hotkey_text = self.overlay_hotkey_input.text().strip().lower()
+        add_time_hotkey_text = self.add_time_hotkey_input.text().strip().lower()
+        subtract_time_hotkey_text = self.subtract_time_hotkey_input.text().strip().lower()
         monitor_index = int(self.monitor_select.currentData())
         room = int(self.room_select.currentData())
         self.app.update_settings(
@@ -1931,7 +2074,12 @@ class SettingsWindow(QtWidgets.QWidget):
             hotkey_text_2,
             chat_hotkey_text,
             overlay_hotkey_text,
+            add_time_hotkey_text,
+            subtract_time_hotkey_text,
+            self.cycle_window_input.value(),
+            self.scroll_adjust_enabled.isChecked(),
             monitor_index,
+            str(self.timer_anchor_select.currentData() or DEFAULT_TIMER_ANCHOR),
             room,
             self.map_select.currentText(),
             self._current_role(),
@@ -1958,6 +2106,10 @@ class SettingsWindow(QtWidgets.QWidget):
         last_room = presets.get("_last_room")
         self.chat_hotkey_input.setText(presets.get("_chat_hotkey", CHAT_HOTKEY))
         self.overlay_hotkey_input.setText(presets.get("_overlay_toggle_hotkey", OVERLAY_TOGGLE_HOTKEY))
+        self.add_time_hotkey_input.setText(presets.get("_add_time_hotkey", ADD_TIME_HOTKEY))
+        self.subtract_time_hotkey_input.setText(presets.get("_subtract_time_hotkey", SUBTRACT_TIME_HOTKEY))
+        self.cycle_window_input.setValue(float(presets.get("_preset_cycle_window", DEFAULT_PRESET_CYCLE_WINDOW)))
+        self.scroll_adjust_enabled.setChecked(bool(presets.get("_scroll_adjust_enabled", False)))
         player_name = str(presets.get("_player_name") or "").strip()
         # Gameplay overlays are the default. The only persisted exception is an
         # explicit opt-out from the player through the compatibility checkbox.
@@ -1984,6 +2136,9 @@ class SettingsWindow(QtWidgets.QWidget):
                 self.hotkey_input_2.setText(preset.get("hotkey_2", HOTKEY_2))
                 self.chat_hotkey_input.setText(presets.get("_chat_hotkey", CHAT_HOTKEY))
                 self.overlay_hotkey_input.setText(presets.get("_overlay_toggle_hotkey", OVERLAY_TOGGLE_HOTKEY))
+                anchor_index = self.timer_anchor_select.findData(preset.get("timer_anchor", DEFAULT_TIMER_ANCHOR))
+                if anchor_index >= 0:
+                    self.timer_anchor_select.setCurrentIndex(anchor_index)
                 monitor_index = int(preset.get("monitor_index", 0))
                 if 0 <= monitor_index < self.monitor_select.count():
                     self.monitor_select.setCurrentIndex(monitor_index)
@@ -2033,6 +2188,14 @@ class SettingsWindow(QtWidgets.QWidget):
         presets["_overlay_toggle_hotkey"] = str(hotkey or OVERLAY_TOGGLE_HOTKEY).strip().lower()
         self._save_presets(presets)
 
+    def _save_timer_controls(self, add_hotkey, subtract_hotkey, cycle_window, scroll_enabled):
+        presets = self._load_presets()
+        presets["_add_time_hotkey"] = str(add_hotkey or ADD_TIME_HOTKEY).strip().lower()
+        presets["_subtract_time_hotkey"] = str(subtract_hotkey or SUBTRACT_TIME_HOTKEY).strip().lower()
+        presets["_preset_cycle_window"] = float(cycle_window)
+        presets["_scroll_adjust_enabled"] = bool(scroll_enabled)
+        self._save_presets(presets)
+
     def _save_chat_appearance(self, font_size, text_color):
         presets = self._load_presets()
         presets["_chat_font_size"] = int(font_size)
@@ -2054,6 +2217,9 @@ class SettingsWindow(QtWidgets.QWidget):
         monitor_index = int(preset.get("monitor_index", 0))
         if 0 <= monitor_index < self.monitor_select.count():
             self.monitor_select.setCurrentIndex(monitor_index)
+        anchor_index = self.timer_anchor_select.findData(preset.get("timer_anchor", DEFAULT_TIMER_ANCHOR))
+        if anchor_index >= 0:
+            self.timer_anchor_select.setCurrentIndex(anchor_index)
         if map_name in MAP_PRESETS:
             self.map_select.setCurrentText(map_name)
         self._apply_current_settings()
@@ -2067,9 +2233,14 @@ class SettingsWindow(QtWidgets.QWidget):
             "times_2": self.times_input_2.text().strip(),
             "hotkey_2": self.hotkey_input_2.text().strip().lower(),
             "monitor_index": int(self.monitor_select.currentData()),
+            "timer_anchor": str(self.timer_anchor_select.currentData() or DEFAULT_TIMER_ANCHOR),
         }
         presets["_chat_hotkey"] = self.chat_hotkey_input.text().strip().lower()
         presets["_overlay_toggle_hotkey"] = self.overlay_hotkey_input.text().strip().lower()
+        presets["_add_time_hotkey"] = self.add_time_hotkey_input.text().strip().lower()
+        presets["_subtract_time_hotkey"] = self.subtract_time_hotkey_input.text().strip().lower()
+        presets["_preset_cycle_window"] = self.cycle_window_input.value()
+        presets["_scroll_adjust_enabled"] = self.scroll_adjust_enabled.isChecked()
         presets["_last_map"] = map_name
         presets["_last_role"] = self._current_role()
         self._save_presets(presets)
@@ -2362,6 +2533,10 @@ class CapTimerApp:
         self.chat_overlay = ChatOverlayWindow()
         self.connection_state = "offline"
         self.cycle_index = [-1, -1]
+        self.last_timer_press_at = [0.0, 0.0]
+        self.preset_cycle_window = DEFAULT_PRESET_CYCLE_WINDOW
+        self.timer_anchor = DEFAULT_TIMER_ANCHOR
+        self.scroll_adjust_enabled = False
         self.lock = threading.Lock()
         self.compatibility_mode_enabled = False
         # This is intentionally session-only: overlays start visible on launch
@@ -2375,8 +2550,11 @@ class CapTimerApp:
             lambda hotkey_id: self.dispatch_ui(
                 lambda hotkey_id=hotkey_id: self._on_registered_hotkey(hotkey_id)
             ),
+            wheel_callback=lambda delta: self.dispatch_ui(
+                lambda delta=delta: self._on_scroll_adjust(delta)
+            ),
         )
-        self._hotkey_down = {1: False, 2: False, 3: False, 4: False}
+        self._hotkey_down = {hotkey_id: False for hotkey_id in range(1, 7)}
         self._last_hotkey_fire = 0.0
         self._last_toggle_hotkey = 0.0
         self._game_window_handle = 0
@@ -2550,6 +2728,10 @@ class CapTimerApp:
             self.open_chat_composer()
         elif hotkey_id == 4:
             self._toggle_gameplay_overlays_from_hotkey()
+        elif hotkey_id == 5:
+            self.adjust_active_timer(5)
+        elif hotkey_id == 6:
+            self.adjust_active_timer(-5)
 
     def _fire_hotkey(self, hotkey_id):
         """Trigger once when either Windows hotkey path observes the key press."""
@@ -2579,7 +2761,7 @@ class CapTimerApp:
     def _poll_held_hotkeys(self):
         """Fallback for games that suppress RegisterHotKey while other keys are held."""
         if self.compatibility_mode_enabled or self._text_entry_focused:
-            self._hotkey_down = {1: False, 2: False, 3: False, 4: False}
+            self._hotkey_down = {hotkey_id: False for hotkey_id in range(1, 7)}
             return
         for hotkey_id, key in self._active_hotkey_bindings():
             virtual_key = NativeHotkeyManager._virtual_key(key)
@@ -2589,6 +2771,10 @@ class CapTimerApp:
                     self.open_chat_composer()
                 elif hotkey_id == 4:
                     self._toggle_gameplay_overlays_from_hotkey()
+                elif hotkey_id == 5:
+                    self.adjust_active_timer(5)
+                elif hotkey_id == 6:
+                    self.adjust_active_timer(-5)
                 else:
                     self._fire_hotkey(hotkey_id)
             self._hotkey_down[hotkey_id] = down
@@ -2619,7 +2805,9 @@ class CapTimerApp:
         self.hotkey_manager.unregister(2)
         self.hotkey_manager.unregister(3)
         self.hotkey_manager.unregister(4)
-        self._hotkey_down = {1: False, 2: False, 3: False, 4: False}
+        self.hotkey_manager.unregister(5)
+        self.hotkey_manager.unregister(6)
+        self._hotkey_down = {hotkey_id: False for hotkey_id in range(1, 7)}
         self._hotkey_poll_timer.stop()
         if self.compatibility_mode_enabled:
             self.logger.info("Compatibility mode enabled; global hotkeys are disabled")
@@ -2655,7 +2843,17 @@ class CapTimerApp:
             (2, HOTKEY_2),
             (3, CHAT_HOTKEY),
             (4, OVERLAY_TOGGLE_HOTKEY),
+            (5, ADD_TIME_HOTKEY),
+            (6, SUBTRACT_TIME_HOTKEY),
         )
+
+    def _on_scroll_adjust(self, delta):
+        """Wheel updates are opt-in and ignored while normal text entry is active."""
+        if not self.scroll_adjust_enabled or self.compatibility_mode_enabled or self.gameplay_overlays_hidden:
+            return
+        if self._text_entry_focused:
+            return
+        self.adjust_active_timer(1 if delta > 0 else -1)
 
     def open_chat_composer(self):
         """Focus chat only when the player explicitly uses the chat hotkey."""
@@ -2753,7 +2951,12 @@ class CapTimerApp:
         hotkey_text_2: str,
         chat_hotkey_text: str,
         overlay_hotkey_text: str,
+        add_time_hotkey_text: str,
+        subtract_time_hotkey_text: str,
+        preset_cycle_window: float,
+        scroll_adjust_enabled: bool,
         monitor_index: int,
+        timer_anchor: str,
         room: int,
         map_name: Optional[str] = None,
         role: Optional[str] = None,
@@ -2762,7 +2965,7 @@ class CapTimerApp:
         chat_font_size: Optional[int] = None,
         chat_text_color: Optional[str] = None,
     ):
-        global HOTKEY_1, HOTKEY_2, CHAT_HOTKEY, OVERLAY_TOGGLE_HOTKEY, TIMER_OPTIONS_1, TIMER_OPTIONS_2
+        global HOTKEY_1, HOTKEY_2, CHAT_HOTKEY, OVERLAY_TOGGLE_HOTKEY, ADD_TIME_HOTKEY, SUBTRACT_TIME_HOTKEY, TIMER_OPTIONS_1, TIMER_OPTIONS_2
         with self.lock:
             new_times_1 = []
             if times_text_1:
@@ -2807,12 +3010,30 @@ class CapTimerApp:
                 OVERLAY_TOGGLE_HOTKEY = overlay_hotkey_text
                 self.settings._save_overlay_hotkey(OVERLAY_TOGGLE_HOTKEY)
                 hotkeys_changed = True
+            if add_time_hotkey_text and add_time_hotkey_text != ADD_TIME_HOTKEY:
+                ADD_TIME_HOTKEY = add_time_hotkey_text
+                hotkeys_changed = True
+            if subtract_time_hotkey_text and subtract_time_hotkey_text != SUBTRACT_TIME_HOTKEY:
+                SUBTRACT_TIME_HOTKEY = subtract_time_hotkey_text
+                hotkeys_changed = True
+            self.preset_cycle_window = max(0.5, min(3.0, float(preset_cycle_window)))
+            self.scroll_adjust_enabled = bool(scroll_adjust_enabled)
+            self.hotkey_manager.set_wheel_enabled(self.scroll_adjust_enabled)
+            self.settings._save_timer_controls(
+                ADD_TIME_HOTKEY,
+                SUBTRACT_TIME_HOTKEY,
+                self.preset_cycle_window,
+                self.scroll_adjust_enabled,
+            )
             if hotkeys_changed:
                 self._refresh_hotkeys()
 
             if monitor_index != self.monitor_index:
                 self.monitor_index = monitor_index
                 self.position_window()
+            if timer_anchor in {value for _, value in TIMER_ANCHORS} and timer_anchor != self.timer_anchor:
+                self.timer_anchor = timer_anchor
+                self.position_window(reset_chat_position=False)
             if room and int(room) != int(self.room):
                 self._request_room(int(room))
             if map_name:
@@ -3113,6 +3334,11 @@ class CapTimerApp:
         reveal = not self.compatibility_mode_enabled and not self.gameplay_overlays_hidden
         self.window.start_timer(index, float(seconds), reveal=reveal)
 
+    def handle_remote_timer_adjust(self, index, delta):
+        """Keep team fine-tuning in sync without overriding an overlay toggle."""
+        reveal = not self.compatibility_mode_enabled and not self.gameplay_overlays_hidden
+        self.window.adjust_timer(index, float(delta), reveal=reveal)
+
     def handle_team_directory(self, teams):
         self.settings.update_team_activity(teams)
 
@@ -3209,7 +3435,15 @@ class CapTimerApp:
                 options = TIMER_OPTIONS_2
             if not options:
                 return
-            self.cycle_index[index] = (self.cycle_index[index] + 1) % len(options)
+            now = time.monotonic()
+            self.cycle_index[index] = choose_timer_preset(
+                options,
+                self.cycle_index[index],
+                self.last_timer_press_at[index],
+                now,
+                self.preset_cycle_window,
+            )
+            self.last_timer_press_at[index] = now
             sec = options[self.cycle_index[index]]
             print(f"Emitting signal with {sec} seconds for capper {index + 1}")
             # Use Qt signal to safely call start() from background thread
@@ -3221,6 +3455,22 @@ class CapTimerApp:
                 asyncio.run_coroutine_threadsafe(
                     self.ws_client.send_timer(sec, self.player_id, index + 1), self.ws_loop
                 )
+
+    def adjust_active_timer(self, delta: int):
+        """Adjust only the caller's claimed capper timer, then sync the team."""
+        role_to_index = {"Capper 1": 0, "Capper 2": 1}
+        index = role_to_index.get(self.role)
+        if index is None or not delta:
+            return
+        if self.window._remaining[index] <= 0:
+            self.update_status("Start your capper timer before adjusting it")
+            return
+        self.window.adjust_timer_signal.emit(index, float(delta))
+        if self.ws_client and self.ws_client.running:
+            asyncio.run_coroutine_threadsafe(
+                self.ws_client.send_timer_adjustment(int(delta), self.player_id, index + 1),
+                self.ws_loop,
+            )
     def _start_session(self):
         if self._session_started:
             return
@@ -3253,7 +3503,12 @@ class CapTimerApp:
             HOTKEY_2,
             CHAT_HOTKEY,
             OVERLAY_TOGGLE_HOTKEY,
+            ADD_TIME_HOTKEY,
+            SUBTRACT_TIME_HOTKEY,
+            self.preset_cycle_window,
+            self.scroll_adjust_enabled,
             self.monitor_index,
+            self.timer_anchor,
             self.room,
             self.selected_map,
             self.role,
@@ -3281,7 +3536,7 @@ class CapTimerApp:
         print(f"Window should be visible. Label texts: {self.window.label.texts()}")
         sys.exit(self.app.exec())
 
-    def position_window(self):
+    def position_window(self, reset_chat_position=True):
         screens = QtWidgets.QApplication.screens()
         if not screens:
             return
@@ -3290,8 +3545,7 @@ class CapTimerApp:
         screen = screens[self.monitor_index].availableGeometry()
         w = WINDOW_WIDTH
         h = WINDOW_HEIGHT
-        x = int(screen.x() + (screen.width() - w) / 2)
-        y = int(screen.y() + screen.height() * 0.05)
+        x, y = timer_anchor_position(screen, w, h, self.timer_anchor)
 
         # Set the final monitor geometry before the first show/click-through.
         self.window.place_on_screen(x, y, w, h)
@@ -3308,10 +3562,11 @@ class CapTimerApp:
             self.window.label.resize(TIMER_WIDTH, WINDOW_HEIGHT)
         else:
             self.window.hide()
-        chat_w = self.chat.width()
-        chat_h = self.chat.height()
-        self.chat.setGeometry(screen.x() + 18, screen.y() + screen.height() - chat_h - 18, chat_w, chat_h)
-        self.chat_overlay.set_position(screen, chat_h)
+        if reset_chat_position:
+            chat_w = self.chat.width()
+            chat_h = self.chat.height()
+            self.chat.setGeometry(screen.x() + 18, screen.y() + screen.height() - chat_h - 18, chat_w, chat_h)
+            self.chat_overlay.set_position(screen, chat_h)
 
 
 def parse_args():

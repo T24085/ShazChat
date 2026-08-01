@@ -7,7 +7,9 @@ endorsed by Hi-Rez Studios or Prophecy Games.
 
 ## Features
 
-- **Global Hotkey**: Press `V` (configurable) to cycle through timer presets (35s → 25s → 20s)
+- **Forgiving timer controls**: One press always starts the first timer preset; only quick repeat presses cycle through the next presets.
+- **Fast timer corrections**: Configurable +5/-5 second hotkeys plus an optional scroll-wheel +1/-1 adjustment for the capper slot you own.
+- **Monitor-relative timer placement**: Place timer cards at any top/bottom, left/center/right anchor on the selected display.
 - **Private team sync**: Connect through `wss://capper.novatec.casa`; rooms, roles, rosters, and timers are server-scoped
 - **Team presence**: Player names, role assignments, and the active team roster are shared only within the selected team room
 - **Optional team privacy**: The first player in an empty team can set an optional password; it is cleared automatically when everyone leaves

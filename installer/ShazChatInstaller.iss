@@ -1,5 +1,5 @@
 #define MyAppName "ShazChat"
-#define MyAppVersion "1.12.3"
+#define MyAppVersion "1.13.0"
 #define MyAppPublisher "ShazChat"
 #define MyAppExeName "ShazChat.exe"
 
