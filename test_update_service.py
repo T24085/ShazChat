@@ -96,9 +96,11 @@ class UpdateServiceTests(unittest.TestCase):
             "Test release",
             "2026-07-23T00:00:00Z",
         )
-        with tempfile.TemporaryDirectory() as cache, patch.object(update_service, "urlopen", return_value=FakeResponse(payload)):
+        with tempfile.TemporaryDirectory() as cache, patch.object(update_service, "urlopen", return_value=FakeResponse(payload)) as mocked_open:
             installer = download_verified_installer(release, cache)
             self.assertEqual(installer.read_bytes(), payload)
+        request = mocked_open.call_args.args[0]
+        self.assertEqual(request.get_header("User-agent"), "ShazChat Update Downloader")
         bad_release = UpdateRelease(release.version, release.installer_url, "0" * 64, release.size, release.notes, release.published_at)
         with tempfile.TemporaryDirectory() as cache, patch.object(update_service, "urlopen", return_value=FakeResponse(payload)):
             with self.assertRaises(UpdateError):

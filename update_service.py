@@ -122,7 +122,12 @@ def download_verified_installer(release: UpdateRelease, cache_dir: str | os.Path
     destination_dir = Path(cache_dir)
     destination_dir.mkdir(parents=True, exist_ok=True)
     destination = destination_dir / f"ShazChat-Setup-{release.version}.exe"
-    request = Request(release.installer_url)
+    # R2 rejects urllib's anonymous default user agent. Keep this static so
+    # installer downloads carry no player, device, team, or version metadata.
+    request = Request(
+        release.installer_url,
+        headers={"User-Agent": "ShazChat Update Downloader"},
+    )
     hasher = hashlib.sha256()
     bytes_written = 0
     fd, temporary_name = tempfile.mkstemp(prefix="capper-times-", suffix=".download", dir=destination_dir)
