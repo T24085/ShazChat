@@ -1637,7 +1637,7 @@ class SettingsWindow(QtWidgets.QWidget):
             return page
 
         self.tabs.addTab(tab_page(player_group), "Settings")
-        self.tabs.addTab(tab_page(timer_group), "Timers")
+        self.tabs.addTab(tab_page(timer_group), "Timers / Bindings")
         self.tabs.addTab(tab_page(chat_group), "Chat")
         self.tabs.addTab(tab_page(room_group, role_group, roster_group), "Roles / Team")
         self.tabs.addTab(tab_page(account_group), "Account")
